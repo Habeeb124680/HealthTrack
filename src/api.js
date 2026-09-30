@@ -1,16 +1,19 @@
 // ---------------------------------------------------------------------------
 // api.js
 // ---------------------------------------------------------------------------
+
 export const API_BASE_URL =
   import.meta.env.VITE_API_URL || 'http://localhost:4000/api';
 
 const TOKEN_KEY = 'healthtrack.token';
 const USER_KEY = 'healthtrack.user';
+
 const USE_MOCK = false;
 
 // ---------------------------------------------------------------------------
 // HTTP request helper
 // ---------------------------------------------------------------------------
+
 async function request(path, { method = 'GET', body, token } = {}) {
   const authToken =
     token || localStorage.getItem(TOKEN_KEY);
@@ -29,7 +32,9 @@ async function request(path, { method = 'GET', body, token } = {}) {
     body: body ? JSON.stringify(body) : undefined,
   });
 
-  const contentType = res.headers.get('content-type') || '';
+  const contentType =
+    res.headers.get('content-type') || '';
+
   let data = null;
 
   if (contentType.includes('application/json')) {
@@ -57,6 +62,7 @@ async function request(path, { method = 'GET', body, token } = {}) {
 // ---------------------------------------------------------------------------
 // Small helpers
 // ---------------------------------------------------------------------------
+
 const delay = (value, ms = 200) =>
   new Promise((resolve) =>
     setTimeout(() => resolve(value), ms)
@@ -68,6 +74,7 @@ const uid = () =>
 // ---------------------------------------------------------------------------
 // Local storage helpers
 // ---------------------------------------------------------------------------
+
 function readStore(key, fallback = null) {
   try {
     const raw = localStorage.getItem(key);
@@ -95,6 +102,7 @@ const KEYS = {
 // ---------------------------------------------------------------------------
 // Date helpers
 // ---------------------------------------------------------------------------
+
 function toBackendDate(date, time = '00:00') {
   if (!date) return '';
 
@@ -119,7 +127,10 @@ function fromBackendTime(value) {
   if (!value) return '';
 
   // Backend may return an ISO date/time
-  if (typeof value === 'string' && value.includes('T')) {
+  if (
+    typeof value === 'string' &&
+    value.includes('T')
+  ) {
     const date = new Date(value);
 
     if (!Number.isNaN(date.getTime())) {
@@ -134,6 +145,7 @@ function fromBackendTime(value) {
 // ---------------------------------------------------------------------------
 // Routine mappings
 // ---------------------------------------------------------------------------
+
 const routineTypeToBackend = {
   Medication: 'medication',
   Exercise: 'exercise',
@@ -180,37 +192,47 @@ const routineFrequencyFromBackend = {
 // ---------------------------------------------------------------------------
 // Normalize backend routine -> frontend routine
 // ---------------------------------------------------------------------------
+
 function normalizeRoutine(routine) {
   if (!routine) return null;
 
   return {
     id: routine._id || routine.id,
+
     name:
       routine.title ||
       routine.name ||
       '',
+
     type:
       routineTypeFromBackend[routine.type] ||
       routine.type ||
       'Other',
+
     description:
       routine.description ||
       '',
+
     frequency:
       routineFrequencyFromBackend[routine.frequency] ||
       routine.frequency ||
       'Daily',
-    // Backend currently does not provide days.
+
     days: routine.days || [],
+
     time: fromBackendTime(routine.time),
+
     startDate:
       fromBackendDate(routine.startDate),
+
     endDate:
       fromBackendDate(routine.endDate),
+
     active:
       routine.routineStatus !== undefined
         ? routine.routineStatus
         : routine.active ?? true,
+
     reminder:
       routine.reminder ?? true,
   };
@@ -219,6 +241,7 @@ function normalizeRoutine(routine) {
 // ---------------------------------------------------------------------------
 // Prepare frontend routine -> backend routine
 // ---------------------------------------------------------------------------
+
 function prepareRoutineForBackend(item) {
   const startDate =
     item.startDate ||
@@ -232,33 +255,39 @@ function prepareRoutineForBackend(item) {
     title:
       item.name?.trim() ||
       'Health routine',
+
     type:
       routineTypeToBackend[item.type] ||
       item.type?.toLowerCase() ||
       'other',
+
     description:
       item.description?.trim() ||
       `${item.name || 'Health'} routine`,
+
     frequency:
       routineFrequencyToBackend[item.frequency] ||
       item.frequency?.toLowerCase() ||
       'daily',
-    // Backend validator expects an ISO date.
-    time: toBackendDate(
-      startDate,
-      time
-    ),
+
+    time:
+      toBackendDate(
+        startDate,
+        time
+      ),
+
     startDate:
       toBackendDate(
         startDate,
         '00:00'
       ),
-          // Backend create validator currently requires endDate.
+
     endDate:
       toBackendDate(
         item.endDate || startDate,
         '23:59'
       ),
+
     routineStatus:
       item.active !== undefined
         ? item.active
@@ -355,7 +384,8 @@ export const authApi = {
           ? existing
           : {
               id: uid(),
-              name: email.split('@')[0],
+              name:
+                email.split('@')[0],
               email,
             };
 
@@ -438,7 +468,9 @@ export const authApi = {
     );
   },
 
-  async resetPassword({ password }) {
+  async resetPassword({
+    password,
+  }) {
     if (USE_MOCK) {
       return delay({
         ok: true,
@@ -649,8 +681,6 @@ export const routinesApi = {
 
 export const logsApi = {
   async list() {
-    // The current backend does not expose a logs endpoint yet, so keep
-    // routine completion status in this browser until the backend adds one.
     return readStore(
       KEYS.logs,
       []
@@ -672,7 +702,8 @@ export const logsApi = {
       logs.filter(
         (log) =>
           !(
-            log.routineId === routineId &&
+            log.routineId ===
+              routineId &&
             log.date === date
           )
       );
@@ -700,6 +731,7 @@ export const logsApi = {
 
 // ---------------------------------------------------------------------------
 // Other API exports
+//
 // These are kept because App.jsx imports them.
 // Their backend endpoints have not been verified yet.
 // ---------------------------------------------------------------------------

@@ -18,7 +18,6 @@ import {
   useLocation,
 } from 'react-router-dom';
 import {
-  Activity,
   Calendar as CalendarIcon,
   CalendarClock,
   Check,
@@ -380,9 +379,9 @@ function AuthShell({ children }) {
 
 const ONBOARDING_SLIDES = [
   {
-    icon: <Activity size={34} />,
-    title: 'Create & Track Routines',
-    body: 'Add medications, exercise, hydration and more — all managed from one simple dashboard.',
+    icon: <Check size={34} strokeWidth={3} />,
+    title: 'Track Every Routine In One Place',
+    body: 'Medications, appointments, checkups and vitals. All organized together',
   },
   {
     icon: <span className="onboarding-bang">!</span>,
@@ -396,6 +395,16 @@ function OnboardingPage() {
   const navigate = useNavigate();
   const [step, setStep] = useState(0);
 
+  useEffect(() => {
+    if (user) return undefined;
+
+    const interval = setInterval(() => {
+      setStep((current) => (current + 1) % (ONBOARDING_SLIDES.length + 1));
+    }, 3500);
+
+    return () => clearInterval(interval);
+  }, [user]);
+
   if (user) return <Navigate to="/app" replace />;
 
   const total = ONBOARDING_SLIDES.length + 1;
@@ -405,7 +414,7 @@ function OnboardingPage() {
     <div className="onboarding-shell">
       {isFinal ? (
         <>
-          <div className="onboarding-icon final"><Heart size={30} /></div>
+          <div className="onboarding-icon final"><Heart size={30} fill="var(--green)" stroke="var(--green)" /></div>
           <h1>Health Track</h1>
           <p>Create, schedule, get reminded, and track your health routines all in one place</p>
         </>
@@ -647,11 +656,11 @@ function ProtectedRoute({ children }) {
 }
 
 const TABS = [
-  { to: '/app', icon: HomeIcon, end: true },
-  { to: '/app/routines', icon: CheckSquare },
-  { to: '/app/calendar', icon: CalendarIcon },
-  { to: '/app/progress', icon: Triangle },
-  { to: '/app/settings', icon: SettingsIcon },
+  { to: '/app', label: 'Home', icon: HomeIcon, end: true },
+  { to: '/app/routines', label: 'Routines', icon: CheckSquare },
+  { to: '/app/calendar', label: 'Calendar', icon: CalendarIcon },
+  { to: '/app/progress', label: 'Progress', icon: Triangle },
+  { to: '/app/settings', label: 'Settings', icon: SettingsIcon },
 ];
 
 const NAV_ITEMS = [
@@ -711,9 +720,10 @@ function AppShell({ children }) {
       <div className="app-main">
         <main className="app-content">{children}</main>
         <nav className="bottom-nav">
-          {TABS.map(({ to, icon: Icon, end }) => (
+          {TABS.map(({ to, label, icon: Icon, end }) => (
             <NavLink key={to} to={to} end={end} className={({ isActive }) => `tab ${isActive ? 'active' : ''}`}>
               <span className="tab-icon"><Icon size={20} /></span>
+              <span className="tab-label">{label}</span>
             </NavLink>
           ))}
         </nav>
