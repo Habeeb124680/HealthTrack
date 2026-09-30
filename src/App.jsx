@@ -241,9 +241,20 @@ function DataProvider({ children }) {
 
   const refresh = useCallback(async () => {
     setLoading(true);
-    await Promise.all([routines.load(), medications.load(), appointments.load(), checkups.load(), vitals.load()]);
-    setLogs(await logsApi.list());
-    setLoading(false);
+
+    try {
+      await routines.load();
+
+      // Routine status logs are stored locally until the backend
+      // exposes a dedicated logs endpoint.
+      setLogs(await logsApi.list());
+    } catch (error) {
+      console.error('Failed to load routines:', error);
+      setLogs([]);
+    } finally {
+      setLoading(false);
+    }
+
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -827,7 +838,10 @@ function RoutinesPage() {
         <div className="row-list">
           {filtered.map((r) => {
             const status = logFor(r.id, today)?.status;
-            const schedule = r.frequency === 'Daily' ? 'Daily' : `Weekly, ${r.days.join(', ') || '—'}`;
+            const schedule =
+              r.frequency === 'Daily'
+                ? 'Daily'
+                : `Weekly${r.days?.length ? `, ${r.days.join(', ')}` : ''}`;
             return (
               <Link to={`/app/routines/${r.id}/edit`} className="item-row" key={r.id}>
                 <Badge text={typeAbbrev(r.type)} tint="violet" />
@@ -849,76 +863,306 @@ function RoutinesPage() {
 function RoutineFormPage() {
   const { id } = useParams();
   const navigate = useNavigate();
-  const { routines, addRoutine, updateRoutine, removeRoutine } = useData();
-  const existing = id ? routines.find((r) => r.id === id) : null;
+  const {
+    routines,
+    addRoutine,
+    updateRoutine,
+    removeRoutine,
+  } = useData();
 
-  const [form, setForm] = useState(() => existing || {
-    name: '', type: 'Medication', frequency: 'Daily', days: [], time: '08:00', startDate: todayStr(), active: true, reminder: true,
-  });
+  const existing = id
+    ? routines.find((r) => r.id === id)
+    : null;
+
+  const [form, setForm] = useState(() =>
+    existing || {
+      name: '',
+      type: 'Medication',
+      frequency: 'Daily',
+      days: [],
+      time: '08:00',
+      startDate: todayStr(),
+      endDate: todayStr(),
+      active: true,
+      reminder: true,
+      description: '',
+    }
+  );
+
   const [saving, setSaving] = useState(false);
-  const update = (patch) => setForm((f) => ({ ...f, ...patch }));
+  const [deleting, setDeleting] = useState(false);
+  const [error, setError] = useState('');
+
+  const update = (patch) => {
+    setForm((current) => ({
+      ...current,
+      ...patch,
+    }));
+  };
 
   useEffect(() => {
-    if (existing) setForm(existing);
+    if (existing) {
+      setForm({
+        ...existing,
+        endDate: existing.endDate || existing.startDate || todayStr(),
+        description: existing.description || '',
+        days: existing.days || [],
+      });
+    }
   }, [existing]);
 
   const toggleDay = (day) => {
-    const days = form.days.includes(day) ? form.days.filter((d) => d !== day) : [...form.days, day];
+    const days = form.days.includes(day)
+      ? form.days.filter((d) => d !== day)
+      : [...form.days, day];
+
     update({ days });
   };
 
   const onSubmit = async (e) => {
     e.preventDefault();
-    if (!form.name.trim()) return;
+    setError('');
+
+    if (!form.name.trim()) {
+      setError('Please enter a routine name.');
+      return;
+    }
+
+    if (!form.startDate) {
+      setError('Please select a start date.');
+      return;
+    }
+
     setSaving(true);
+
     try {
-      if (existing) await updateRoutine(existing.id, form);
-      else await addRoutine(form);
+      const payload = {
+        ...form,
+        name: form.name.trim(),
+        description:
+          form.description?.trim() ||
+          `${form.name.trim()} routine`,
+        endDate: form.endDate || form.startDate,
+      };
+
+      if (existing) {
+        await updateRoutine(existing.id, payload);
+      } else {
+        await addRoutine(payload);
+      }
+
       navigate('/app/routines');
+    } catch (err) {
+      console.error('Routine save failed:', err);
+      setError(
+        err?.message ||
+        'Could not save the routine. Please try again.'
+      );
     } finally {
       setSaving(false);
     }
   };
 
   const onDelete = async () => {
-    await removeRoutine(existing.id);
-    navigate('/app/routines');
+    if (!existing) return;
+
+    const confirmed = window.confirm(
+      `Delete "${existing.name}"? This action cannot be undone.`
+    );
+
+    if (!confirmed) return;
+
+    setError('');
+    setDeleting(true);
+
+    try {
+      await removeRoutine(existing.id);
+      navigate('/app/routines');
+    } catch (err) {
+      console.error('Routine delete failed:', err);
+      setError(
+        err?.message ||
+        'Could not delete the routine. Please try again.'
+      );
+    } finally {
+      setDeleting(false);
+    }
   };
 
   return (
     <div className="page form-page">
       <BackHeader to="/app/routines" />
-      <h1 className="center">{existing ? 'Edit Routine' : 'New Routine'}</h1>
+
+      <h1 className="center">
+        {existing ? 'Edit Routine' : 'New Routine'}
+      </h1>
+
       <form onSubmit={onSubmit} className="stacked-form">
-        <label>Routine Name<input value={form.name} onChange={(e) => update({ name: e.target.value })} placeholder="e.g Take Vitamin D" required /></label>
+        <label>
+          Routine Name
+          <input
+            value={form.name}
+            onChange={(e) =>
+              update({ name: e.target.value })
+            }
+            placeholder="e.g Take Vitamin D"
+            required
+          />
+        </label>
+
         <label>
           Routine Type
-          <select value={form.type} onChange={(e) => update({ type: e.target.value })}>
-            {ROUTINE_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
+          <select
+            value={form.type}
+            onChange={(e) =>
+              update({ type: e.target.value })
+            }
+          >
+            {ROUTINE_TYPES.map((type) => (
+              <option key={type} value={type}>
+                {type}
+              </option>
+            ))}
           </select>
         </label>
+
+        <label>
+          Description
+          <textarea
+            value={form.description || ''}
+            onChange={(e) =>
+              update({ description: e.target.value })
+            }
+            placeholder="Describe this routine"
+            rows={4}
+          />
+        </label>
+
         <label>
           Frequency
-          <select value={form.frequency} onChange={(e) => update({ frequency: e.target.value, days: e.target.value === 'Daily' ? [] : form.days })}>
+          <select
+            value={form.frequency}
+            onChange={(e) =>
+              update({
+                frequency: e.target.value,
+                days:
+                  e.target.value === 'Daily'
+                    ? []
+                    : form.days,
+              })
+            }
+          >
             <option value="Daily">Daily</option>
             <option value="Weekly">Specific days</option>
           </select>
         </label>
+
         {form.frequency !== 'Daily' && (
           <div className="day-picker">
-            {WEEKDAYS.map((d) => (
-              <button type="button" key={d} className={`day-chip ${form.days.includes(d) ? 'active' : ''}`} onClick={() => toggleDay(d)}>{d}</button>
+            {WEEKDAYS.map((day) => (
+              <button
+                type="button"
+                key={day}
+                className={`day-chip ${
+                  form.days.includes(day)
+                    ? 'active'
+                    : ''
+                }`}
+                onClick={() => toggleDay(day)}
+              >
+                {day}
+              </button>
             ))}
           </div>
         )}
-        <label>Time<input type="time" value={form.time} onChange={(e) => update({ time: e.target.value })} required /></label>
-        <label>Start Date<input type="date" value={form.startDate} onChange={(e) => update({ startDate: e.target.value })} required /></label>
+
+        <label>
+          Time
+          <input
+            type="time"
+            value={form.time}
+            onChange={(e) =>
+              update({ time: e.target.value })
+            }
+            required
+          />
+        </label>
+
+        <label>
+          Start Date
+          <input
+            type="date"
+            value={form.startDate}
+            onChange={(e) =>
+              update({ startDate: e.target.value })
+            }
+            required
+          />
+        </label>
+
+        <label>
+          End Date
+          <input
+            type="date"
+            value={form.endDate || form.startDate}
+            min={form.startDate}
+            onChange={(e) =>
+              update({ endDate: e.target.value })
+            }
+            required
+          />
+        </label>
+
         <div className="switch-row">
           <span>Enable Reminder</span>
-          <Toggle checked={form.reminder} onChange={(v) => update({ reminder: v })} />
+          <Toggle
+            checked={form.reminder}
+            onChange={(value) =>
+              update({ reminder: value })
+            }
+          />
         </div>
-        <button type="submit" className="btn btn-primary btn-block" disabled={saving}>{saving ? 'Saving…' : 'Save Routine'}</button>
-        {existing && <button type="button" className="btn btn-danger btn-block" onClick={onDelete}>Delete Routine</button>}
+
+        <div className="switch-row">
+          <span>Active</span>
+          <Toggle
+            checked={form.active}
+            onChange={(value) =>
+              update({ active: value })
+            }
+          />
+        </div>
+
+        {error && (
+          <div className="form-error">
+            {error}
+          </div>
+        )}
+
+        <button
+          type="submit"
+          className="btn btn-primary btn-block"
+          disabled={saving || deleting}
+        >
+          {saving
+            ? existing
+              ? 'Updating…'
+              : 'Creating…'
+            : 'Save Routine'}
+        </button>
+
+        {existing && (
+          <button
+            type="button"
+            className="btn btn-danger btn-block"
+            onClick={onDelete}
+            disabled={saving || deleting}
+          >
+            {deleting
+              ? 'Deleting…'
+              : 'Delete Routine'}
+          </button>
+        )}
       </form>
     </div>
   );
