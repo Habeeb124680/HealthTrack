@@ -2,25 +2,15 @@
 // api.js
 // ---------------------------------------------------------------------------
 
-export const API_BASE_URL =
-  import.meta.env.VITE_API_URL || 'http://localhost:4000/api';
+export const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:4000/api';
 
 const TOKEN_KEY = 'healthtrack.token';
 const USER_KEY = 'healthtrack.user';
-
 const USE_MOCK = false;
 
-// ---------------------------------------------------------------------------
-// HTTP request helper
-// ---------------------------------------------------------------------------
-
 async function request(path, { method = 'GET', body, token } = {}) {
-  const authToken =
-    token || localStorage.getItem(TOKEN_KEY);
-
-  const headers = {
-    'Content-Type': 'application/json',
-  };
+  const authToken = token || localStorage.getItem(TOKEN_KEY);
+  const headers = { 'Content-Type': 'application/json' };
 
   if (authToken) {
     headers.Authorization = `Bearer ${authToken}`;
@@ -32,9 +22,7 @@ async function request(path, { method = 'GET', body, token } = {}) {
     body: body ? JSON.stringify(body) : undefined,
   });
 
-  const contentType =
-    res.headers.get('content-type') || '';
-
+  const contentType = res.headers.get('content-type') || '';
   let data = null;
 
   if (contentType.includes('application/json')) {
@@ -46,22 +34,14 @@ async function request(path, { method = 'GET', body, token } = {}) {
   if (!res.ok) {
     const message =
       typeof data === 'object' && data
-        ? data.message ||
-          data.error ||
-          JSON.stringify(data)
+        ? data.message || data.error || JSON.stringify(data)
         : data;
 
-    throw new Error(
-      message || `Request failed: ${res.status}`
-    );
+    throw new Error(message || `Request failed: ${res.status}`);
   }
 
   return data;
 }
-
-// ---------------------------------------------------------------------------
-// Small helpers
-// ---------------------------------------------------------------------------
 
 const delay = (value, ms = 200) =>
   new Promise((resolve) =>
@@ -70,10 +50,6 @@ const delay = (value, ms = 200) =>
 
 const uid = () =>
   Math.random().toString(36).slice(2, 10);
-
-// ---------------------------------------------------------------------------
-// Local storage helpers
-// ---------------------------------------------------------------------------
 
 function readStore(key, fallback = null) {
   try {
@@ -99,16 +75,10 @@ const KEYS = {
   vitals: 'healthtrack.vitals',
 };
 
-// ---------------------------------------------------------------------------
-// Date helpers
-// ---------------------------------------------------------------------------
-
 function toBackendDate(date, time = '00:00') {
   if (!date) return '';
 
-  const safeTime = time || '00:00';
-
-  return `${date}T${safeTime}:00.000Z`;
+  return `${date}T${time || '00:00'}:00.000Z`;
 }
 
 function fromBackendDate(value) {
@@ -116,17 +86,14 @@ function fromBackendDate(value) {
 
   const date = new Date(value);
 
-  if (Number.isNaN(date.getTime())) {
-    return value;
-  }
-
-  return date.toISOString().slice(0, 10);
+  return Number.isNaN(date.getTime())
+    ? value
+    : date.toISOString().slice(0, 10);
 }
 
 function fromBackendTime(value) {
   if (!value) return '';
 
-  // Backend may return an ISO date/time
   if (
     typeof value === 'string' &&
     value.includes('T')
@@ -138,13 +105,8 @@ function fromBackendTime(value) {
     }
   }
 
-  // Already HH:mm
   return String(value).slice(0, 5);
 }
-
-// ---------------------------------------------------------------------------
-// Routine mappings
-// ---------------------------------------------------------------------------
 
 const routineTypeToBackend = {
   Medication: 'medication',
@@ -189,15 +151,18 @@ const routineFrequencyFromBackend = {
   'every eight hours': 'Every eight hours',
 };
 
-// ---------------------------------------------------------------------------
-// Normalize backend routine -> frontend routine
-// ---------------------------------------------------------------------------
-
 function normalizeRoutine(routine) {
   if (!routine) return null;
 
   return {
     id: routine._id || routine.id,
+
+    userId:
+      routine.user?._id ||
+      routine.user?.id ||
+      (typeof routine.user === 'string'
+        ? routine.user
+        : undefined),
 
     name:
       routine.title ||
@@ -237,10 +202,6 @@ function normalizeRoutine(routine) {
       routine.reminder ?? true,
   };
 }
-
-// ---------------------------------------------------------------------------
-// Prepare frontend routine -> backend routine
-// ---------------------------------------------------------------------------
 
 function prepareRoutineForBackend(item) {
   const startDate =
@@ -296,6 +257,95 @@ function prepareRoutineForBackend(item) {
 }
 
 // ---------------------------------------------------------------------------
+// Default routines
+// ---------------------------------------------------------------------------
+
+const DEFAULT_ROUTINES = [
+  {
+    name: 'Morning Run',
+    type: 'Exercise',
+    description:
+      'A short morning run to support daily physical activity.',
+    frequency: 'Daily',
+    time: '07:00',
+  },
+  {
+    name: 'Drink Water',
+    type: 'Hydration',
+    description:
+      'Drink water in the morning to support healthy hydration.',
+    frequency: 'Daily',
+    time: '08:00',
+  },
+];
+
+async function ensureDefaultRoutines(userId) {
+  if (!userId) return;
+
+  try {
+    const result =
+      await request(
+        '/routine/getAllRoutines'
+      );
+
+    const backendRoutines =
+      Array.isArray(result?.data)
+        ? result.data
+        : [];
+
+    const userRoutines =
+      backendRoutines.filter(
+        (routine) => {
+          const routineUserId =
+            routine.user?._id ||
+            routine.user?.id ||
+            (typeof routine.user === 'string'
+              ? routine.user
+              : undefined);
+
+          return routineUserId
+            ? String(routineUserId) ===
+                String(userId)
+            : false;
+        }
+      );
+
+    for (
+      const defaultRoutine of DEFAULT_ROUTINES
+    ) {
+      const exists =
+        userRoutines.some(
+          (routine) =>
+            String(
+              routine.title || ''
+            )
+              .trim()
+              .toLowerCase() ===
+            defaultRoutine.name.toLowerCase()
+        );
+
+      if (!exists) {
+        await request(
+          '/routine/createRoutine',
+          {
+            method: 'POST',
+            body:
+              prepareRoutineForBackend(
+                defaultRoutine
+              ),
+          }
+        );
+      }
+    }
+  } catch (error) {
+    console.error(
+      'Unable to ensure default routines:',
+      error
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Auth
 // ---------------------------------------------------------------------------
 
@@ -323,7 +373,6 @@ export const authApi = {
       });
     }
 
-    // Registration endpoint does NOT return a token.
     await request(
       '/users/register',
       {
@@ -336,8 +385,6 @@ export const authApi = {
       }
     );
 
-    // Login immediately after registration
-    // to obtain the JWT token.
     const loginResult =
       await request(
         '/users/login',
@@ -363,6 +410,10 @@ export const authApi = {
         loginResult.user
       );
     }
+
+    await ensureDefaultRoutines(
+      loginResult?.user?.id
+    );
 
     return loginResult;
   },
@@ -444,11 +495,6 @@ export const authApi = {
       );
     }
 
-    // Your backend does not currently expose
-    // a /users/me route.
-    //
-    // The logged-in user is therefore recovered
-    // from localStorage.
     return readStore(
       USER_KEY,
       null
@@ -497,15 +543,6 @@ export const authApi = {
 // Routines
 // ---------------------------------------------------------------------------
 
-function getRoutineFromResponse(result) {
-  return (
-    result?.data ||
-    result?.routine ||
-    result?.result ||
-    result
-  );
-}
-
 export const routinesApi = {
   async list() {
     if (USE_MOCK) {
@@ -522,9 +559,41 @@ export const routinesApi = {
         '/routine/getAllRoutines'
       );
 
-    return (
-      result?.data || []
-    ).map(normalizeRoutine);
+    const currentUser =
+      readStore(
+        USER_KEY,
+        null
+      );
+
+    const currentUserId =
+      currentUser?.id ||
+      currentUser?._id;
+
+    const routines =
+      Array.isArray(result?.data)
+        ? result.data
+        : [];
+
+    const userRoutines =
+      routines.filter(
+        (routine) => {
+          const routineUserId =
+            routine.user?._id ||
+            routine.user?.id ||
+            (typeof routine.user === 'string'
+              ? routine.user
+              : undefined);
+
+          return routineUserId
+            ? String(routineUserId) ===
+                String(currentUserId)
+            : false;
+        }
+      );
+
+    return userRoutines.map(
+      normalizeRoutine
+    );
   },
 
   async create(item) {
@@ -731,9 +800,6 @@ export const logsApi = {
 
 // ---------------------------------------------------------------------------
 // Other API exports
-//
-// These are kept because App.jsx imports them.
-// Their backend endpoints have not been verified yet.
 // ---------------------------------------------------------------------------
 
 export const medicationsApi = {
