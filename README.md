@@ -1,96 +1,252 @@
 # HealthTrack — Frontend
 
-BeTechified Capstone (Group 2) — a healthcare routine management web app. This repo is the **frontend only**, built with **React + Vite**. It is written against an API abstraction layer so it can run entirely on mock data today and switch to the real backend by changing one environment variable — no component code changes required.
+**BeTechified Capstone Project — Group 2**
 
-## Tech stack
+HealthTrack is a healthcare routine management web application that helps users create, schedule, manage, and track their health routines in one place. This repository contains the frontend application, built with React and Vite and integrated with the HealthTrack backend API.
 
-- React 18 + Vite
-- React Router (client-side routing, `/`, `/login`, `/register`, `/app/*`)
-- lucide-react (icons)
-- Plain CSS with design tokens (no CSS framework) — theme is driven by CSS variables and a `data-theme="light" | "dark"` attribute on `<html>`
+**Live Application:** https://health-track-seven-rho.vercel.app/
+**GitHub Repository:** https://github.com/Habeeb124680/HealthTrack
 
-## Getting started
+## 1. Tech Stack
+
+**Frontend**
+- React
+- Vite
+- JavaScript (ES6+)
+- React Router
+- HTML5
+- CSS3
+- Lucide React
+- REST API integration
+- Local Storage
+
+**Development and Deployment Tools**
+- Git
+- GitHub
+- VS Code
+- Vercel
+
+## 2. Getting Started
+
+Clone the repository:
 
 ```bash
+git clone https://github.com/Habeeb124680/HealthTrack.git
+cd HealthTrack
 npm install
 npm run dev
 ```
 
-The app runs at `http://localhost:5173` by default.
+The application will normally be available at `http://localhost:5173`.
 
-## Environment variables
+## 3. Environment Variables
 
-Create a `.env.local` file in the project root:
+Create a `.env` file in the project root:
 
 ```bash
-# Base URL the app talks to. Point this at the backend dev's API once it exists.
-VITE_API_BASE_URL=http://localhost:8000/api
-
-# "true" = use in-memory mock data (no backend needed).
-# "false" = call VITE_API_BASE_URL for everything.
-VITE_USE_MOCK=true
+VITE_API_URL=https://health-track-api-j0m5.onrender.com/api
 ```
 
-While `VITE_USE_MOCK=true`, every service function (`authApi`, `routinesApi`, `medicationsApi`, `appointmentsApi`, `checkupsApi`, `vitalsApi`, `logsApi`) returns realistic mock data from local state instead of hitting the network, so the whole app is usable before the backend exists. Flip the flag to `false` once real endpoints are ready.
+The frontend uses this value as the base URL for API requests. API communication is handled through `src/api.js`.
 
-## Folder structure
+## 4. Frontend Architecture
 
 ```
 src/
-  api/              # everything that talks to the outside world
-    client.js       # fetch wrapper: base URL, auth header, error handling
-    services/        # one file per resource (auth, routines, dashboard, ...)
-    mock/            # mock data used when VITE_USE_MOCK=true
-  components/
-    layout/          # Sidebar, Topbar, app shell
-    ui/               # Button, Card, StatusWidget, RoutineCategoryCard, etc.
-  context/           # ThemeContext (light/dark), AuthContext (current user)
-  pages/             # one folder per route (auth, dashboard, routines, ...)
-  styles/            # theme.css (design tokens), global.css (resets)
   App.jsx
+  App.css
+  api.js
   main.jsx
 ```
 
-## Features (MVP scope)
+- **App.jsx** — contains routing, authentication, onboarding, dashboard, routine management, calendar, medications, appointments, checkups, vitals, progress, and settings.
+- **App.css** — contains the application's styling, responsive design, navigation, forms, buttons, cards, and themes.
+- **api.js** — provides the API abstraction layer for HTTP requests, authentication, JWT handling, routine requests, local routine logs, and error handling.
 
-Matches the PRD's must-have list:
+## 5. Key Features Implemented
 
-- Register / log in
-- Dashboard — today's health status + today's scheduled routines
-- Create / edit / deactivate / delete a routine (name, type, frequency, time, start date)
-- Reminders for scheduled routines
-- Mark a routine completed or missed
-- Routine history
-- Basic adherence / progress measure (`completed ÷ total scheduled × 100`)
-- Profile / settings, light & dark mode
+- **User Authentication** — Register, log in, log out, maintain an authenticated session, and access protected pages.
+- **Onboarding** — Multi-step introduction covering routine tracking, reminders, and HealthTrack.
+- **Routine Management** — View, create, edit, delete, activate/deactivate, categorize, schedule, and track routines.
+- **Default Routines** — New users are set up with *Morning Run — Exercise — Daily — 7:00 AM* and *Drink Water — Hydration — Daily — 8:00 AM*.
+- **Routine Progress** — Status flow is `Pending -> Completed -> Missed -> Pending`. Logs are currently stored locally.
+- **Dashboard** — Personalized greeting, today's routines, status, health shortcuts, and progress.
+- **Calendar** — Visual interface for scheduled routines and health-related activities.
+- **Medications** — Dedicated medication section.
+- **Appointments** — Appointment management interface.
+- **Checkups** — Health checkup interface.
+- **Vitals** — Blood pressure, heart rate, weight, and temperature interfaces.
+- **Progress** — Routine completion and adherence overview.
+- **Settings** — Profile, notification preferences, email notification preferences, dark mode, and logout.
 
-Out of scope for this MVP (per PRD): AI recommendations, doctor consultation, diagnosis, wearable integration, EHR integration.
+## 6. API Integration
 
-## API contract the backend needs to implement
+The frontend communicates with the HealthTrack backend through REST API requests.
 
-The frontend expects these shapes. Any backend that returns them is a drop-in replacement for the mock layer:
+| Method | Endpoint | Purpose |
+|---|---|---|
+| POST | `/users/register` | Register a new user |
+| POST | `/users/login` | Authenticate a user |
+| GET | `/routine/getAllRoutines` | Retrieve routines |
+| GET | `/routine/getRoutineById/:id` | Retrieve a routine by ID |
+| POST | `/routine/createRoutine` | Create a routine |
+| PUT | `/routine/editRoutine/:id` | Update a routine |
+| DELETE | `/routine/deleteRoutine/:id` | Delete a routine |
 
-| Resource | Endpoints |
-|---|---|
-| Auth | `POST /auth/register`, `POST /auth/login`, `GET /auth/me`, `POST /auth/forgot-password`, `POST /auth/reset-password` — login/register return `{ user, token }` |
-| Routines | `GET/POST /routines`, `PATCH/DELETE /routines/:id` |
-| Routine logs | `GET /routine-logs`, `GET /routines/:id/logs`, `POST /routines/:id/logs` (`{ status: "completed" \| "missed", date }`) |
-| Medications | `GET/POST /medications`, `PATCH/DELETE /medications/:id` |
-| Appointments | `GET/POST /appointments`, `PATCH/DELETE /appointments/:id` |
-| Checkups | `GET/POST /checkups`, `PATCH/DELETE /checkups/:id` |
-| Vitals | `GET/POST /vitals`, `DELETE /vitals/:id` |
-| Dashboard | `GET /dashboard/health-status`, `GET /dashboard/adherence` |
+Authenticated requests use:
 
-Auth uses a bearer token: the frontend stores whatever `token` the login/register response returns and sends it as `Authorization: Bearer <token>` on every subsequent request.
-
-## Scripts
-
-```bash
-npm run dev       # start local dev server
-npm run build     # production build to dist/
-npm run preview   # preview the production build locally
+```
+Authorization: Bearer <token>
 ```
 
-## Design
+## 7. Authentication Flow
 
-UI follows the product-design mockups exactly (purple/violet accent, light & dark themes, sidebar navigation). Design tokens live in `src/styles/theme.css` (or `App.css`, depending on which version you're using) — update the hex values there if the design team provides an exact palette/Figma spec.
+```
+User submits registration
+        |
+POST /users/register
+        |
+Account is created
+        |
+Frontend automatically logs the user in
+        |
+POST /users/login
+        |
+JWT token is returned
+        |
+Token is stored in localStorage
+        |
+Authenticated API requests
+```
+
+## 8. Routine Data Flow
+
+```
+React Component
+      |
+  routinesApi
+      |
+   api.js
+      |
+HealthTrack REST API
+      |
+    Backend
+      |
+   Database
+      |
+ API Response
+      |
+React Application
+```
+
+The API response is normalized by the frontend before being used by React components.
+
+## 9. API Error Handling
+
+The API request helper checks the HTTP response status. When the backend returns an unsuccessful response, the frontend attempts to display the backend's returned error message.
+
+## 10. Local Storage
+
+The frontend uses browser local storage for:
+
+- Authentication token
+- Current user information
+- Routine logs
+- Local application state where required
+
+The authentication token is used for protected API requests. Routine logs are currently stored locally because the dedicated routine-log API has not been connected to the frontend.
+
+## 11. Responsive Design
+
+HealthTrack is designed for desktop, tablet, and mobile. Desktop uses sidebar navigation while smaller screens use a mobile-friendly navigation layout.
+
+## 12. Light and Dark Mode
+
+HealthTrack supports both light mode and dark mode. Users can switch themes from Settings.
+
+## 13. Design
+
+The interface follows the project's product design direction with purple/violet accents, rounded cards, soft backgrounds, clear status indicators, responsive layouts, and light/dark themes. Lucide React provides interface icons.
+
+## 14. Project Structure
+
+```
+HealthTrack/
+  public/
+  src/
+    App.jsx
+    App.css
+    api.js
+    main.jsx
+  .env
+  package.json
+  package-lock.json
+  README.md
+```
+
+## 15. Current MVP Scope
+
+**Implemented**
+- User registration
+- User login and logout
+- Authentication token handling
+- Onboarding
+- Dashboard
+- Routine CRUD
+- Routine status tracking
+- Routine progress tracking
+- Default routine setup
+- Calendar interface
+- Medication interface
+- Appointment interface
+- Checkup interface
+- Vitals interface
+- Progress interface
+- Settings
+- Light and dark mode
+- Responsive design
+- REST API integration
+
+**Future Improvements**
+- Persistent routine logs
+- Medication persistence
+- Appointment persistence
+- Checkup persistence
+- Vitals persistence
+- Dashboard health statistics
+- Email notifications
+- Push notifications
+- Advanced health analytics
+
+## 16. Scripts
+
+```bash
+npm run dev       # Start development server
+npm run build     # Create production build
+npm run preview   # Preview production build locally
+```
+
+## 17. Deployment
+
+The frontend is deployed at:
+https://health-track-seven-rho.vercel.app/
+
+The application can be updated by pushing changes to the connected GitHub repository.
+
+## 18. Repository
+
+Frontend source code:
+https://github.com/Habeeb124680/HealthTrack
+
+## 19. Team
+
+**BeTechified Capstone Project — Group 2**
+**Project:** HealthTrack
+**Development Area:** Frontend Development
+**Frontend Technology:** React + Vite
+
+## 20. Documentation Purpose
+
+This README provides technical documentation for developers working on the HealthTrack frontend. It documents the frontend technology stack, project structure, installation and setup, environment configuration, API integration, authentication, routine management, key application features, local storage usage, development scripts, and deployment information.
+
+The backend API is maintained separately from this frontend repository.
