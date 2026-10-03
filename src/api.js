@@ -892,3 +892,456 @@ export const routinesApi = {
     return true;
   },
 };
+
+// ---------------------------------------------------------------------------
+// Routine Logs
+// ---------------------------------------------------------------------------
+
+export const logsApi = {
+  async list() {
+    return readUserStore(
+      KEYS.logs,
+      []
+    );
+  },
+
+  async record({
+    routineId,
+    date,
+    status,
+  }) {
+    const logs =
+      readUserStore(
+        KEYS.logs,
+        []
+      );
+
+    const entry = {
+      id: uid(),
+      routineId,
+      date,
+      status,
+      loggedAt:
+        new Date().toISOString(),
+    };
+
+    const nextLogs =
+      logs.filter(
+        (log) =>
+          !(
+            log.routineId ===
+              routineId &&
+            log.date === date
+          )
+      );
+
+    writeUserStore(
+      KEYS.logs,
+      [
+        entry,
+        ...nextLogs,
+      ]
+    );
+
+    return entry;
+  },
+};
+
+// ---------------------------------------------------------------------------
+// Medications
+// ---------------------------------------------------------------------------
+
+export const medicationsApi = {
+  async list() {
+    return readUserStore(
+      KEYS.medications,
+      []
+    );
+  },
+
+  async create(item) {
+    const medications =
+      readUserStore(
+        KEYS.medications,
+        []
+      );
+
+    const created = {
+      id: uid(),
+
+      name:
+        item.name?.trim() ||
+        'Medication',
+
+      category:
+        item.category?.trim() ||
+        '',
+
+      frequency:
+        item.frequency?.trim() ||
+        'Daily',
+
+      startDate:
+        item.startDate ||
+        new Date()
+          .toISOString()
+          .slice(0, 10),
+
+      endDate:
+        item.endDate ||
+        '',
+    };
+
+    writeUserStore(
+      KEYS.medications,
+      [
+        created,
+        ...medications,
+      ]
+    );
+
+    return created;
+  },
+
+  async update(
+    id,
+    item
+  ) {
+    const medications =
+      readUserStore(
+        KEYS.medications,
+        []
+      );
+
+    const next =
+      medications.map(
+        (medication) =>
+          medication.id === id
+            ? {
+                ...medication,
+                ...item,
+                id,
+              }
+            : medication
+      );
+
+    writeUserStore(
+      KEYS.medications,
+      next
+    );
+
+    return next.find(
+      (medication) =>
+        medication.id === id
+    );
+  },
+
+  async remove(id) {
+    const medications =
+      readUserStore(
+        KEYS.medications,
+        []
+      );
+
+    writeUserStore(
+      KEYS.medications,
+      medications.filter(
+        (medication) =>
+          medication.id !== id
+      )
+    );
+
+    return true;
+  },
+};
+
+// ---------------------------------------------------------------------------
+// Appointments
+// ---------------------------------------------------------------------------
+
+export const appointmentsApi = {
+  async list() {
+    return readUserStore(
+      KEYS.appointments,
+      []
+    );
+  },
+
+  async create(item) {
+    const appointments =
+      readUserStore(
+        KEYS.appointments,
+        []
+      );
+
+    const created = {
+      id: uid(),
+
+      doctorName:
+        item.doctorName?.trim() ||
+        'Appointment',
+
+      specialty:
+        item.specialty?.trim() ||
+        '',
+
+      date:
+        item.date ||
+        new Date()
+          .toISOString()
+          .slice(0, 10),
+
+      time:
+        item.time ||
+        '10:00 AM',
+
+      location:
+        item.location?.trim() ||
+        '',
+    };
+
+    writeUserStore(
+      KEYS.appointments,
+      [
+        created,
+        ...appointments,
+      ]
+    );
+
+    return created;
+  },
+
+  async update(
+    id,
+    item
+  ) {
+    const appointments =
+      readUserStore(
+        KEYS.appointments,
+        []
+      );
+
+    const next =
+      appointments.map(
+        (appointment) =>
+          appointment.id === id
+            ? {
+                ...appointment,
+                ...item,
+                id,
+              }
+            : appointment
+      );
+
+    writeUserStore(
+      KEYS.appointments,
+      next
+    );
+
+    return next.find(
+      (appointment) =>
+        appointment.id === id
+    );
+  },
+
+  async remove(id) {
+    const appointments =
+      readUserStore(
+        KEYS.appointments,
+        []
+      );
+
+    writeUserStore(
+      KEYS.appointments,
+      appointments.filter(
+        (appointment) =>
+          appointment.id !== id
+      )
+    );
+
+    return true;
+  },
+};
+
+// ---------------------------------------------------------------------------
+// Checkups
+// ---------------------------------------------------------------------------
+
+export const checkupsApi = {
+  async list() {
+    return readUserStore(
+      KEYS.checkups,
+      []
+    );
+  },
+
+  async create(item) {
+    const checkups =
+      readUserStore(
+        KEYS.checkups,
+        []
+      );
+
+    const created = {
+      id: uid(),
+
+      name:
+        item.name?.trim() ||
+        'Checkup',
+
+      nextDue:
+        item.nextDue ||
+        new Date()
+          .toISOString()
+          .slice(0, 10),
+    };
+
+    writeUserStore(
+      KEYS.checkups,
+      [
+        created,
+        ...checkups,
+      ]
+    );
+
+    return created;
+  },
+
+  async update(
+    id,
+    item
+  ) {
+    const checkups =
+      readUserStore(
+        KEYS.checkups,
+        []
+      );
+
+    const next =
+      checkups.map(
+        (checkup) =>
+          checkup.id === id
+            ? {
+                ...checkup,
+                ...item,
+                id,
+              }
+            : checkup
+      );
+
+    writeUserStore(
+      KEYS.checkups,
+      next
+    );
+
+    return next.find(
+      (checkup) =>
+        checkup.id === id
+    );
+  },
+
+  async remove(id) {
+    const checkups =
+      readUserStore(
+        KEYS.checkups,
+        []
+      );
+
+    writeUserStore(
+      KEYS.checkups,
+      checkups.filter(
+        (checkup) =>
+          checkup.id !== id
+      )
+    );
+
+    return true;
+  },
+};
+
+// ---------------------------------------------------------------------------
+// Vitals
+// ---------------------------------------------------------------------------
+
+export const vitalsApi = {
+  async list() {
+    return readUserStore(
+      KEYS.vitals,
+      []
+    );
+  },
+
+  async create(item) {
+    const vitals =
+      readUserStore(
+        KEYS.vitals,
+        []
+      );
+
+    const created = {
+      id: uid(),
+      ...item,
+    };
+
+    writeUserStore(
+      KEYS.vitals,
+      [
+        created,
+        ...vitals,
+      ]
+    );
+
+    return created;
+  },
+
+  async update(
+    id,
+    item
+  ) {
+    const vitals =
+      readUserStore(
+        KEYS.vitals,
+        []
+      );
+
+    const next =
+      vitals.map(
+        (vital) =>
+          vital.id === id
+            ? {
+                ...vital,
+                ...item,
+                id,
+              }
+            : vital
+      );
+
+    writeUserStore(
+      KEYS.vitals,
+      next
+    );
+
+    return next.find(
+      (vital) =>
+        vital.id === id
+    );
+  },
+
+  async remove(id) {
+    const vitals =
+      readUserStore(
+        KEYS.vitals,
+        []
+      );
+
+    writeUserStore(
+      KEYS.vitals,
+      vitals.filter(
+        (vital) =>
+          vital.id !== id
+      )
+    );
+
+    return true;
+  },
+};
