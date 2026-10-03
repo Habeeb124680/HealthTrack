@@ -109,7 +109,11 @@ function userStoreKey(key) {
 
 function readUserStore(key, fallback = []) {
   const scoped = readStore(userStoreKey(key), null);
-  if (scoped !== null) return scoped;
+
+  if (scoped !== null) {
+    return scoped;
+  }
+
   return readStore(key, fallback);
 }
 
@@ -118,33 +122,53 @@ function writeUserStore(key, value) {
 }
 
 // ---------------------------------------------------------------------------
-// Date helpers
+// Date/time helpers
 // ---------------------------------------------------------------------------
 
 function toBackendDate(date, time = '00:00') {
-  if (!date) return '';
+  if (!date) {
+    return new Date().toISOString();
+  }
 
-  const safeTime = time || '00:00';
+  const safeTime =
+    typeof time === 'string' && time.length >= 5
+      ? time.slice(0, 5)
+      : '00:00';
 
-  return `${date}T${safeTime}:00.000Z`;
+  const value = `${date}T${safeTime}:00`;
+
+  const parsed = new Date(value);
+
+  if (Number.isNaN(parsed.getTime())) {
+    return new Date().toISOString();
+  }
+
+  return parsed.toISOString();
 }
 
 function fromBackendDate(value) {
-  if (!value) return '';
+  if (!value) {
+    return '';
+  }
 
   const date = new Date(value);
 
   if (Number.isNaN(date.getTime())) {
-    return value;
+    return String(value).slice(0, 10);
   }
 
   return date.toISOString().slice(0, 10);
 }
 
 function fromBackendTime(value) {
-  if (!value) return '';
+  if (!value) {
+    return '08:00';
+  }
 
-  if (typeof value === 'string' && value.includes('T')) {
+  if (
+    typeof value === 'string' &&
+    value.includes('T')
+  ) {
     const date = new Date(value);
 
     if (!Number.isNaN(date.getTime())) {
@@ -207,10 +231,29 @@ const routineFrequencyFromBackend = {
 // ---------------------------------------------------------------------------
 
 function normalizeRoutine(routine) {
-  if (!routine) return null;
+  if (!routine) {
+    return null;
+  }
 
   return {
-    id: routine._id || routine.id,
+    id:
+      routine._id ||
+      routine.id,
+
+    ownerId:
+      typeof routine.user === 'object' &&
+      routine.user
+        ? (
+            routine.user._id ||
+            routine.user.id ||
+            routine.user.email ||
+            ''
+          )
+        : (
+            routine.user ||
+            routine.userId ||
+            ''
+          ),
 
     name:
       routine.title ||
@@ -227,19 +270,28 @@ function normalizeRoutine(routine) {
       '',
 
     frequency:
-      routineFrequencyFromBackend[routine.frequency] ||
+      routineFrequencyFromBackend[
+        routine.frequency
+      ] ||
       routine.frequency ||
       'Daily',
 
-    days: routine.days || [],
+    days:
+      routine.days ||
+      [],
 
-    time: fromBackendTime(routine.time),
+    time:
+      fromBackendTime(routine.time),
 
     startDate:
-      fromBackendDate(routine.startDate),
+      fromBackendDate(
+        routine.startDate
+      ),
 
     endDate:
-      fromBackendDate(routine.endDate),
+      fromBackendDate(
+        routine.endDate
+      ),
 
     active:
       routine.routineStatus !== undefined
@@ -279,14 +331,17 @@ function prepareRoutineForBackend(item) {
       `${item.name || 'Health'} routine`,
 
     frequency:
-      routineFrequencyToBackend[item.frequency] ||
+      routineFrequencyToBackend[
+        item.frequency
+      ] ||
       item.frequency?.toLowerCase() ||
       'daily',
 
-    time: toBackendDate(
-      startDate,
-      time
-    ),
+    time:
+      toBackendDate(
+        startDate,
+        time
+      ),
 
     startDate:
       toBackendDate(
@@ -296,7 +351,8 @@ function prepareRoutineForBackend(item) {
 
     endDate:
       toBackendDate(
-        item.endDate || startDate,
+        item.endDate ||
+          startDate,
         '23:59'
       ),
 
@@ -312,7 +368,7 @@ function prepareRoutineForBackend(item) {
 // ---------------------------------------------------------------------------
 
 export const authApi = {
-  async register({
+    async register({
     name,
     email,
     password,
@@ -335,7 +391,7 @@ export const authApi = {
       });
     }
 
-    // Registration endpoint does NOT return a token.
+    // Register the user first.
     await request(
       '/users/register',
       {
@@ -348,8 +404,9 @@ export const authApi = {
       }
     );
 
-    // Login immediately after registration
-    // to obtain the JWT token.
+    // The backend registration endpoint does not
+    // return a token, so log in immediately after
+    // registration to obtain one.
     const loginResult =
       await request(
         '/users/login',
@@ -396,7 +453,8 @@ export const authApi = {
           ? existing
           : {
               id: uid(),
-              name: email.split('@')[0],
+              name:
+                email.split('@')[0],
               email,
             };
 
@@ -497,9 +555,9 @@ export const authApi = {
     }
 
     // The current backend does not expose
-    // a /users/me route.
+    // a /users/me endpoint.
     //
-    // The logged-in user is therefore recovered
+    // The signed-in user is therefore recovered
     // from localStorage.
     return readStore(
       USER_KEY,
@@ -520,7 +578,9 @@ export const authApi = {
     );
   },
 
-  async resetPassword({ password }) {
+  async resetPassword({
+    password,
+  }) {
     if (USE_MOCK) {
       return delay({
         ok: true,
@@ -547,7 +607,9 @@ export const authApi = {
 // Routines
 // ---------------------------------------------------------------------------
 
-function getRoutineFromResponse(result) {
+function getRoutineFromResponse(
+  result
+) {
   return (
     result?.data ||
     result?.routine ||
@@ -572,10 +634,40 @@ export const routinesApi = {
         '/routine/getAllRoutines'
       );
 
-    return (
+    const currentUser =
+      readStore(
+        USER_KEY,
+        null
+      );
+
+    const currentUserId =
+      String(
+        currentUser?.id ||
+        currentUser?._id ||
+        currentUser?.email ||
+        ''
+      );
+
+    const normalized = (
       result?.data || []
-    ).map(
-      normalizeRoutine
+    )
+      .map(normalizeRoutine)
+      .filter(Boolean);
+
+    // If there is no signed-in user,
+    // don't expose any routines.
+    if (!currentUserId) {
+      return [];
+    }
+
+    // The current backend may return routines
+    // belonging to multiple users. Only keep
+    // routines belonging to the current user.
+    return normalized.filter(
+      (routine) =>
+        String(
+          routine.ownerId || ''
+        ) === currentUserId
     );
   },
 
@@ -617,11 +709,29 @@ export const routinesApi = {
         }
       );
 
-    return normalizeRoutine(
-      getRoutineFromResponse(
-        result
-      )
-    );
+    const created =
+      normalizeRoutine(
+        result?.data
+      );
+
+    const currentUser =
+      readStore(
+        USER_KEY,
+        null
+      );
+
+    return {
+      ...created,
+
+      ownerId:
+        created?.ownerId ||
+        String(
+          currentUser?.id ||
+          currentUser?._id ||
+          currentUser?.email ||
+          ''
+        ),
+    };
   },
 
   async getById(id) {
@@ -645,14 +755,44 @@ export const routinesApi = {
         `/routine/getRoutineById/${id}`
       );
 
-    return normalizeRoutine(
-      getRoutineFromResponse(
-        result
-      )
-    );
+    const routine =
+      normalizeRoutine(
+        getRoutineFromResponse(
+          result
+        )
+      );
+
+    const currentUser =
+      readStore(
+        USER_KEY,
+        null
+      );
+
+    if (
+      routine &&
+      routine.ownerId &&
+      String(
+        routine.ownerId
+      ) !==
+        String(
+          currentUser?.id ||
+          currentUser?._id ||
+          currentUser?.email ||
+          ''
+        )
+    ) {
+      throw new Error(
+        'You do not have access to this routine.'
+      );
+    }
+
+    return routine;
   },
 
-  async update(id, item) {
+  async update(
+    id,
+    item
+  ) {
     if (USE_MOCK) {
       const routines =
         readStore(
@@ -696,11 +836,29 @@ export const routinesApi = {
         }
       );
 
-    return normalizeRoutine(
-      getRoutineFromResponse(
-        result
-      )
-    );
+    const updated =
+      normalizeRoutine(
+        result?.data
+      );
+
+    const currentUser =
+      readStore(
+        USER_KEY,
+        null
+      );
+
+    return {
+      ...updated,
+
+      ownerId:
+        updated?.ownerId ||
+        String(
+          currentUser?.id ||
+          currentUser?._id ||
+          currentUser?.email ||
+          ''
+        ),
+    };
   },
 
   async remove(id) {
@@ -719,535 +877,16 @@ export const routinesApi = {
         )
       );
 
-      return delay({
-        success: true,
-      });
-    }
-
-    const result =
-      await request(
-        `/routine/deleteRoutine/${id}`,
-        {
-          method: 'DELETE',
-        }
-      );
-
-    return (
-      result?.data ||
-      result
-    );
-  },
-};
-
-// ---------------------------------------------------------------------------
-// Default routines for new users
-// ---------------------------------------------------------------------------
-
-const DEFAULT_ROUTINES = [
-  {
-    name: 'Morning Run',
-    type: 'Exercise',
-    description:
-      'Morning exercise routine',
-    frequency: 'Daily',
-    time: '07:00',
-    active: true,
-  },
-  {
-    name: 'Drink Water',
-    type: 'Hydration',
-    description:
-      'Stay hydrated throughout the day',
-    frequency: 'Daily',
-    time: '08:00',
-    active: true,
-  },
-];
-
-async function ensureDefaultRoutines() {
-  const user =
-    readStore(
-      USER_KEY,
-      null
-    );
-
-  if (!user) {
-    return;
-  }
-
-  const existing =
-    readStore(
-      userStoreKey(
-        KEYS.routines
-      ),
-      []
-    );
-
-  if (
-    Array.isArray(existing) &&
-    existing.length > 0
-  ) {
-    return;
-  }
-
-  // The backend stores routines.
-  // Only create the defaults for a new
-  // frontend user when there are no
-  // routines already known locally.
-  for (
-    const routine of DEFAULT_ROUTINES
-  ) {
-    try {
-      await routinesApi.create(
-        routine
-      );
-    } catch (error) {
-      console.error(
-        'Failed to create default routine:',
-        error
+      return delay(
+        true
       );
     }
-  }
-}
 
-// ---------------------------------------------------------------------------
-// Routine Logs
-// ---------------------------------------------------------------------------
-
-export const logsApi = {
-  async list() {
-    // The current backend does not expose a logs endpoint yet,
-    // so routine completion status is stored in this browser.
-    return readUserStore(
-      KEYS.logs,
-      []
-    );
-  },
-
-  async record({
-    routineId,
-    date,
-    status,
-  }) {
-    const logs =
-      readUserStore(
-        KEYS.logs,
-        []
-      );
-
-    const rest =
-      logs.filter(
-        (log) =>
-          !(
-            log.routineId === routineId &&
-            log.date === date
-          )
-      );
-
-    const entry = {
-      id: uid(),
-      routineId,
-      date,
-      status,
-      loggedAt:
-        new Date().toISOString(),
-    };
-
-    writeUserStore(
-      KEYS.logs,
-      [
-        entry,
-        ...rest,
-      ]
-    );
-
-    return entry;
-  },
-};
-
-// ---------------------------------------------------------------------------
-// Medications
-// ---------------------------------------------------------------------------
-// The current backend does not provide medication endpoints,
-// so medication data is stored locally in the browser.
-
-export const medicationsApi = {
-  async list() {
-    return readUserStore(
-      KEYS.medications,
-      []
-    );
-  },
-
-  async create(item) {
-    const medications =
-      readUserStore(
-        KEYS.medications,
-        []
-      );
-
-    const created = {
-      id: uid(),
-
-      name:
-        item.name?.trim() ||
-        'Medication',
-
-      category:
-        item.category?.trim() ||
-        '',
-
-      frequency:
-        item.frequency?.trim() ||
-        '',
-
-      startDate:
-        item.startDate ||
-        new Date()
-          .toISOString()
-          .slice(0, 10),
-
-      endDate:
-        item.endDate ||
-        '',
-    };
-
-    writeUserStore(
-      KEYS.medications,
-      [
-        created,
-        ...medications,
-      ]
-    );
-
-    return created;
-  },
-
-  async update(id, item) {
-    const medications =
-      readUserStore(
-        KEYS.medications,
-        []
-      );
-
-    const next =
-      medications.map(
-        (medication) =>
-          medication.id === id
-            ? {
-                ...medication,
-                ...item,
-                id,
-              }
-            : medication
-      );
-
-    writeUserStore(
-      KEYS.medications,
-      next
-    );
-
-    return next.find(
-      (medication) =>
-        medication.id === id
-    );
-  },
-
-  async remove(id) {
-    const medications =
-      readUserStore(
-        KEYS.medications,
-        []
-      );
-
-    writeUserStore(
-      KEYS.medications,
-      medications.filter(
-        (medication) =>
-          medication.id !== id
-      )
-    );
-
-    return true;
-  },
-};
-
-// ---------------------------------------------------------------------------
-// Appointments
-// ---------------------------------------------------------------------------
-
-export const appointmentsApi = {
-  async list() {
-    return readUserStore(
-      KEYS.appointments,
-      []
-    );
-  },
-
-  async create(item) {
-    const appointments =
-      readUserStore(
-        KEYS.appointments,
-        []
-      );
-
-    const created = {
-      id: uid(),
-
-      doctorName:
-        item.doctorName?.trim() ||
-        'Appointment',
-
-      specialty:
-        item.specialty?.trim() ||
-        '',
-
-      date:
-        item.date ||
-        new Date()
-          .toISOString()
-          .slice(0, 10),
-
-      time:
-        item.time ||
-        '10:00 AM',
-
-      location:
-        item.location?.trim() ||
-        '',
-    };
-
-    writeUserStore(
-      KEYS.appointments,
-      [
-        created,
-        ...appointments,
-      ]
-    );
-
-    return created;
-  },
-
-  async update(id, item) {
-    const appointments =
-      readUserStore(
-        KEYS.appointments,
-        []
-      );
-
-    const next =
-      appointments.map(
-        (appointment) =>
-          appointment.id === id
-            ? {
-                ...appointment,
-                ...item,
-                id,
-              }
-            : appointment
-      );
-
-    writeUserStore(
-      KEYS.appointments,
-      next
-    );
-
-    return next.find(
-      (appointment) =>
-        appointment.id === id
-    );
-  },
-
-  async remove(id) {
-    const appointments =
-      readUserStore(
-        KEYS.appointments,
-        []
-      );
-
-    writeUserStore(
-      KEYS.appointments,
-      appointments.filter(
-        (appointment) =>
-          appointment.id !== id
-      )
-    );
-
-    return true;
-  },
-};
-
-// ---------------------------------------------------------------------------
-// Checkups
-// ---------------------------------------------------------------------------
-
-export const checkupsApi = {
-  async list() {
-    return readUserStore(
-      KEYS.checkups,
-      []
-    );
-  },
-
-  async create(item) {
-    const checkups =
-      readUserStore(
-        KEYS.checkups,
-        []
-      );
-
-    const created = {
-      id: uid(),
-
-      name:
-        item.name?.trim() ||
-        'Checkup',
-
-      nextDue:
-        item.nextDue ||
-        new Date()
-          .toISOString()
-          .slice(0, 7),
-    };
-
-    writeUserStore(
-      KEYS.checkups,
-      [
-        created,
-        ...checkups,
-      ]
-    );
-
-    return created;
-  },
-
-  async update(id, item) {
-    const checkups =
-      readUserStore(
-        KEYS.checkups,
-        []
-      );
-
-    const next =
-      checkups.map(
-        (checkup) =>
-          checkup.id === id
-            ? {
-                ...checkup,
-                ...item,
-                id,
-              }
-            : checkup
-      );
-
-    writeUserStore(
-      KEYS.checkups,
-      next
-    );
-
-    return next.find(
-      (checkup) =>
-        checkup.id === id
-    );
-  },
-
-  async remove(id) {
-    const checkups =
-      readUserStore(
-        KEYS.checkups,
-        []
-      );
-
-    writeUserStore(
-      KEYS.checkups,
-      checkups.filter(
-        (checkup) =>
-          checkup.id !== id
-      )
-    );
-
-    return true;
-  },
-};
-
-// ---------------------------------------------------------------------------
-// Vitals
-// ---------------------------------------------------------------------------
-
-export const vitalsApi = {
-  async list() {
-    return readUserStore(
-      KEYS.vitals,
-      []
-    );
-  },
-
-  async create(item) {
-    const vitals =
-      readUserStore(
-        KEYS.vitals,
-        []
-      );
-
-    const created = {
-      id: uid(),
-      ...item,
-    };
-
-    writeUserStore(
-      KEYS.vitals,
-      [
-        created,
-        ...vitals,
-      ]
-    );
-
-    return created;
-  },
-
-  async update(id, item) {
-    const vitals =
-      readUserStore(
-        KEYS.vitals,
-        []
-      );
-
-    const next =
-      vitals.map(
-        (vital) =>
-          vital.id === id
-            ? {
-                ...vital,
-                ...item,
-                id,
-              }
-            : vital
-      );
-
-    writeUserStore(
-      KEYS.vitals,
-      next
-    );
-
-    return next.find(
-      (vital) =>
-        vital.id === id
-    );
-  },
-
-  async remove(id) {
-    const vitals =
-      readUserStore(
-        KEYS.vitals,
-        []
-      );
-
-    writeUserStore(
-      KEYS.vitals,
-      vitals.filter(
-        (vital) =>
-          vital.id !== id
-      )
+    await request(
+      `/routine/deleteRoutine/${id}`,
+      {
+        method: 'DELETE',
+      }
     );
 
     return true;
