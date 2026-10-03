@@ -2,15 +2,25 @@
 // api.js
 // ---------------------------------------------------------------------------
 
-export const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:4000/api';
+export const API_BASE_URL =
+  import.meta.env.VITE_API_URL || 'http://localhost:4000/api';
 
 const TOKEN_KEY = 'healthtrack.token';
 const USER_KEY = 'healthtrack.user';
+
 const USE_MOCK = false;
 
+// ---------------------------------------------------------------------------
+// HTTP request helper
+// ---------------------------------------------------------------------------
+
 async function request(path, { method = 'GET', body, token } = {}) {
-  const authToken = token || localStorage.getItem(TOKEN_KEY);
-  const headers = { 'Content-Type': 'application/json' };
+  const authToken =
+    token || localStorage.getItem(TOKEN_KEY);
+
+  const headers = {
+    'Content-Type': 'application/json',
+  };
 
   if (authToken) {
     headers.Authorization = `Bearer ${authToken}`;
@@ -23,6 +33,7 @@ async function request(path, { method = 'GET', body, token } = {}) {
   });
 
   const contentType = res.headers.get('content-type') || '';
+
   let data = null;
 
   if (contentType.includes('application/json')) {
@@ -34,14 +45,22 @@ async function request(path, { method = 'GET', body, token } = {}) {
   if (!res.ok) {
     const message =
       typeof data === 'object' && data
-        ? data.message || data.error || JSON.stringify(data)
+        ? data.message ||
+          data.error ||
+          JSON.stringify(data)
         : data;
 
-    throw new Error(message || `Request failed: ${res.status}`);
+    throw new Error(
+      message || `Request failed: ${res.status}`
+    );
   }
 
   return data;
 }
+
+// ---------------------------------------------------------------------------
+// Small helpers
+// ---------------------------------------------------------------------------
 
 const delay = (value, ms = 200) =>
   new Promise((resolve) =>
@@ -50,6 +69,10 @@ const delay = (value, ms = 200) =>
 
 const uid = () =>
   Math.random().toString(36).slice(2, 10);
+
+// ---------------------------------------------------------------------------
+// Local storage helpers
+// ---------------------------------------------------------------------------
 
 function readStore(key, fallback = null) {
   try {
@@ -75,10 +98,35 @@ const KEYS = {
   vitals: 'healthtrack.vitals',
 };
 
+function currentUserScope() {
+  const user = readStore(USER_KEY, null);
+  return user?.id || user?._id || user?.email || 'guest';
+}
+
+function userStoreKey(key) {
+  return `${key}.${encodeURIComponent(String(currentUserScope()))}`;
+}
+
+function readUserStore(key, fallback = []) {
+  const scoped = readStore(userStoreKey(key), null);
+  if (scoped !== null) return scoped;
+  return readStore(key, fallback);
+}
+
+function writeUserStore(key, value) {
+  return writeStore(userStoreKey(key), value);
+}
+
+// ---------------------------------------------------------------------------
+// Date helpers
+// ---------------------------------------------------------------------------
+
 function toBackendDate(date, time = '00:00') {
   if (!date) return '';
 
-  return `${date}T${time || '00:00'}:00.000Z`;
+  const safeTime = time || '00:00';
+
+  return `${date}T${safeTime}:00.000Z`;
 }
 
 function fromBackendDate(value) {
@@ -86,18 +134,17 @@ function fromBackendDate(value) {
 
   const date = new Date(value);
 
-  return Number.isNaN(date.getTime())
-    ? value
-    : date.toISOString().slice(0, 10);
+  if (Number.isNaN(date.getTime())) {
+    return value;
+  }
+
+  return date.toISOString().slice(0, 10);
 }
 
 function fromBackendTime(value) {
   if (!value) return '';
 
-  if (
-    typeof value === 'string' &&
-    value.includes('T')
-  ) {
+  if (typeof value === 'string' && value.includes('T')) {
     const date = new Date(value);
 
     if (!Number.isNaN(date.getTime())) {
@@ -107,6 +154,10 @@ function fromBackendTime(value) {
 
   return String(value).slice(0, 5);
 }
+
+// ---------------------------------------------------------------------------
+// Routine mappings
+// ---------------------------------------------------------------------------
 
 const routineTypeToBackend = {
   Medication: 'medication',
@@ -151,18 +202,15 @@ const routineFrequencyFromBackend = {
   'every eight hours': 'Every eight hours',
 };
 
+// ---------------------------------------------------------------------------
+// Normalize backend routine -> frontend routine
+// ---------------------------------------------------------------------------
+
 function normalizeRoutine(routine) {
   if (!routine) return null;
 
   return {
     id: routine._id || routine.id,
-
-    userId:
-      routine.user?._id ||
-      routine.user?.id ||
-      (typeof routine.user === 'string'
-        ? routine.user
-        : undefined),
 
     name:
       routine.title ||
@@ -203,6 +251,10 @@ function normalizeRoutine(routine) {
   };
 }
 
+// ---------------------------------------------------------------------------
+// Prepare frontend routine -> backend routine
+// ---------------------------------------------------------------------------
+
 function prepareRoutineForBackend(item) {
   const startDate =
     item.startDate ||
@@ -231,11 +283,10 @@ function prepareRoutineForBackend(item) {
       item.frequency?.toLowerCase() ||
       'daily',
 
-    time:
-      toBackendDate(
-        startDate,
-        time
-      ),
+    time: toBackendDate(
+      startDate,
+      time
+    ),
 
     startDate:
       toBackendDate(
@@ -254,95 +305,6 @@ function prepareRoutineForBackend(item) {
         ? item.active
         : true,
   };
-}
-
-// ---------------------------------------------------------------------------
-// Default routines
-// ---------------------------------------------------------------------------
-
-const DEFAULT_ROUTINES = [
-  {
-    name: 'Morning Run',
-    type: 'Exercise',
-    description:
-      'A short morning run to support daily physical activity.',
-    frequency: 'Daily',
-    time: '07:00',
-  },
-  {
-    name: 'Drink Water',
-    type: 'Hydration',
-    description:
-      'Drink water in the morning to support healthy hydration.',
-    frequency: 'Daily',
-    time: '08:00',
-  },
-];
-
-async function ensureDefaultRoutines(userId) {
-  if (!userId) return;
-
-  try {
-    const result =
-      await request(
-        '/routine/getAllRoutines'
-      );
-
-    const backendRoutines =
-      Array.isArray(result?.data)
-        ? result.data
-        : [];
-
-    const userRoutines =
-      backendRoutines.filter(
-        (routine) => {
-          const routineUserId =
-            routine.user?._id ||
-            routine.user?.id ||
-            (typeof routine.user === 'string'
-              ? routine.user
-              : undefined);
-
-          return routineUserId
-            ? String(routineUserId) ===
-                String(userId)
-            : false;
-        }
-      );
-
-    for (
-      const defaultRoutine of DEFAULT_ROUTINES
-    ) {
-      const exists =
-        userRoutines.some(
-          (routine) =>
-            String(
-              routine.title || ''
-            )
-              .trim()
-              .toLowerCase() ===
-            defaultRoutine.name.toLowerCase()
-        );
-
-      if (!exists) {
-        await request(
-          '/routine/createRoutine',
-          {
-            method: 'POST',
-            body:
-              prepareRoutineForBackend(
-                defaultRoutine
-              ),
-          }
-        );
-      }
-    }
-  } catch (error) {
-    console.error(
-      'Unable to ensure default routines:',
-      error
-    );
-  }
 }
 
 // ---------------------------------------------------------------------------
@@ -373,6 +335,7 @@ export const authApi = {
       });
     }
 
+    // Registration endpoint does NOT return a token.
     await request(
       '/users/register',
       {
@@ -385,6 +348,8 @@ export const authApi = {
       }
     );
 
+    // Login immediately after registration
+    // to obtain the JWT token.
     const loginResult =
       await request(
         '/users/login',
@@ -411,10 +376,6 @@ export const authApi = {
       );
     }
 
-    await ensureDefaultRoutines(
-      loginResult?.user?.id
-    );
-
     return loginResult;
   },
 
@@ -435,8 +396,7 @@ export const authApi = {
           ? existing
           : {
               id: uid(),
-              name:
-                email.split('@')[0],
+              name: email.split('@')[0],
               email,
             };
 
@@ -485,6 +445,47 @@ export const authApi = {
     return result;
   },
 
+  async updateProfile(patch = {}) {
+    const current =
+      readStore(
+        USER_KEY,
+        null
+      );
+
+    if (!current) {
+      throw new Error(
+        'No signed-in user found.'
+      );
+    }
+
+    const next = {
+      ...current,
+
+      ...(patch.name !== undefined
+        ? {
+            name: String(
+              patch.name
+            ).trim(),
+          }
+        : {}),
+
+      ...(patch.email !== undefined
+        ? {
+            email: String(
+              patch.email
+            ).trim(),
+          }
+        : {}),
+    };
+
+    writeStore(
+      USER_KEY,
+      next
+    );
+
+    return next;
+  },
+
   async me() {
     if (USE_MOCK) {
       return delay(
@@ -495,6 +496,11 @@ export const authApi = {
       );
     }
 
+    // The current backend does not expose
+    // a /users/me route.
+    //
+    // The logged-in user is therefore recovered
+    // from localStorage.
     return readStore(
       USER_KEY,
       null
@@ -514,9 +520,7 @@ export const authApi = {
     );
   },
 
-  async resetPassword({
-    password,
-  }) {
+  async resetPassword({ password }) {
     if (USE_MOCK) {
       return delay({
         ok: true,
@@ -543,6 +547,15 @@ export const authApi = {
 // Routines
 // ---------------------------------------------------------------------------
 
+function getRoutineFromResponse(result) {
+  return (
+    result?.data ||
+    result?.routine ||
+    result?.result ||
+    result
+  );
+}
+
 export const routinesApi = {
   async list() {
     if (USE_MOCK) {
@@ -559,39 +572,9 @@ export const routinesApi = {
         '/routine/getAllRoutines'
       );
 
-    const currentUser =
-      readStore(
-        USER_KEY,
-        null
-      );
-
-    const currentUserId =
-      currentUser?.id ||
-      currentUser?._id;
-
-    const routines =
-      Array.isArray(result?.data)
-        ? result.data
-        : [];
-
-    const userRoutines =
-      routines.filter(
-        (routine) => {
-          const routineUserId =
-            routine.user?._id ||
-            routine.user?.id ||
-            (typeof routine.user === 'string'
-              ? routine.user
-              : undefined);
-
-          return routineUserId
-            ? String(routineUserId) ===
-                String(currentUserId)
-            : false;
-        }
-      );
-
-    return userRoutines.map(
+    return (
+      result?.data || []
+    ).map(
       normalizeRoutine
     );
   },
@@ -635,7 +618,9 @@ export const routinesApi = {
       );
 
     return normalizeRoutine(
-      result?.data
+      getRoutineFromResponse(
+        result
+      )
     );
   },
 
@@ -661,7 +646,9 @@ export const routinesApi = {
       );
 
     return normalizeRoutine(
-      result?.data
+      getRoutineFromResponse(
+        result
+      )
     );
   },
 
@@ -710,7 +697,9 @@ export const routinesApi = {
       );
 
     return normalizeRoutine(
-      result?.data
+      getRoutineFromResponse(
+        result
+      )
     );
   },
 
@@ -730,27 +719,106 @@ export const routinesApi = {
         )
       );
 
-      return delay(true);
+      return delay({
+        success: true,
+      });
     }
 
-    await request(
-      `/routine/deleteRoutine/${id}`,
-      {
-        method: 'DELETE',
-      }
-    );
+    const result =
+      await request(
+        `/routine/deleteRoutine/${id}`,
+        {
+          method: 'DELETE',
+        }
+      );
 
-    return true;
+    return (
+      result?.data ||
+      result
+    );
   },
 };
 
 // ---------------------------------------------------------------------------
-// Logs
+// Default routines for new users
+// ---------------------------------------------------------------------------
+
+const DEFAULT_ROUTINES = [
+  {
+    name: 'Morning Run',
+    type: 'Exercise',
+    description:
+      'Morning exercise routine',
+    frequency: 'Daily',
+    time: '07:00',
+    active: true,
+  },
+  {
+    name: 'Drink Water',
+    type: 'Hydration',
+    description:
+      'Stay hydrated throughout the day',
+    frequency: 'Daily',
+    time: '08:00',
+    active: true,
+  },
+];
+
+async function ensureDefaultRoutines() {
+  const user =
+    readStore(
+      USER_KEY,
+      null
+    );
+
+  if (!user) {
+    return;
+  }
+
+  const existing =
+    readStore(
+      userStoreKey(
+        KEYS.routines
+      ),
+      []
+    );
+
+  if (
+    Array.isArray(existing) &&
+    existing.length > 0
+  ) {
+    return;
+  }
+
+  // The backend stores routines.
+  // Only create the defaults for a new
+  // frontend user when there are no
+  // routines already known locally.
+  for (
+    const routine of DEFAULT_ROUTINES
+  ) {
+    try {
+      await routinesApi.create(
+        routine
+      );
+    } catch (error) {
+      console.error(
+        'Failed to create default routine:',
+        error
+      );
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Routine Logs
 // ---------------------------------------------------------------------------
 
 export const logsApi = {
   async list() {
-    return readStore(
+    // The current backend does not expose a logs endpoint yet,
+    // so routine completion status is stored in this browser.
+    return readUserStore(
       KEYS.logs,
       []
     );
@@ -762,7 +830,7 @@ export const logsApi = {
     status,
   }) {
     const logs =
-      readStore(
+      readUserStore(
         KEYS.logs,
         []
       );
@@ -771,8 +839,7 @@ export const logsApi = {
       logs.filter(
         (log) =>
           !(
-            log.routineId ===
-              routineId &&
+            log.routineId === routineId &&
             log.date === date
           )
       );
@@ -786,7 +853,7 @@ export const logsApi = {
         new Date().toISOString(),
     };
 
-    writeStore(
+    writeUserStore(
       KEYS.logs,
       [
         entry,
@@ -799,101 +866,390 @@ export const logsApi = {
 };
 
 // ---------------------------------------------------------------------------
-// Other API exports
+// Medications
 // ---------------------------------------------------------------------------
+// The current backend does not provide medication endpoints,
+// so medication data is stored locally in the browser.
 
 export const medicationsApi = {
   async list() {
-    return [];
-  },
-
-  async create() {
-    throw new Error(
-      'Medications are not connected to the current backend yet.'
+    return readUserStore(
+      KEYS.medications,
+      []
     );
   },
 
-  async update() {
-    throw new Error(
-      'Medications are not connected to the current backend yet.'
+  async create(item) {
+    const medications =
+      readUserStore(
+        KEYS.medications,
+        []
+      );
+
+    const created = {
+      id: uid(),
+
+      name:
+        item.name?.trim() ||
+        'Medication',
+
+      category:
+        item.category?.trim() ||
+        '',
+
+      frequency:
+        item.frequency?.trim() ||
+        '',
+
+      startDate:
+        item.startDate ||
+        new Date()
+          .toISOString()
+          .slice(0, 10),
+
+      endDate:
+        item.endDate ||
+        '',
+    };
+
+    writeUserStore(
+      KEYS.medications,
+      [
+        created,
+        ...medications,
+      ]
+    );
+
+    return created;
+  },
+
+  async update(id, item) {
+    const medications =
+      readUserStore(
+        KEYS.medications,
+        []
+      );
+
+    const next =
+      medications.map(
+        (medication) =>
+          medication.id === id
+            ? {
+                ...medication,
+                ...item,
+                id,
+              }
+            : medication
+      );
+
+    writeUserStore(
+      KEYS.medications,
+      next
+    );
+
+    return next.find(
+      (medication) =>
+        medication.id === id
     );
   },
 
-  async remove() {
-    throw new Error(
-      'Medications are not connected to the current backend yet.'
+  async remove(id) {
+    const medications =
+      readUserStore(
+        KEYS.medications,
+        []
+      );
+
+    writeUserStore(
+      KEYS.medications,
+      medications.filter(
+        (medication) =>
+          medication.id !== id
+      )
     );
+
+    return true;
   },
 };
+
+// ---------------------------------------------------------------------------
+// Appointments
+// ---------------------------------------------------------------------------
 
 export const appointmentsApi = {
   async list() {
-    return [];
-  },
-
-  async create() {
-    throw new Error(
-      'Appointments are not connected to the current backend yet.'
+    return readUserStore(
+      KEYS.appointments,
+      []
     );
   },
 
-  async update() {
-    throw new Error(
-      'Appointments are not connected to the current backend yet.'
+  async create(item) {
+    const appointments =
+      readUserStore(
+        KEYS.appointments,
+        []
+      );
+
+    const created = {
+      id: uid(),
+
+      doctorName:
+        item.doctorName?.trim() ||
+        'Appointment',
+
+      specialty:
+        item.specialty?.trim() ||
+        '',
+
+      date:
+        item.date ||
+        new Date()
+          .toISOString()
+          .slice(0, 10),
+
+      time:
+        item.time ||
+        '10:00 AM',
+
+      location:
+        item.location?.trim() ||
+        '',
+    };
+
+    writeUserStore(
+      KEYS.appointments,
+      [
+        created,
+        ...appointments,
+      ]
+    );
+
+    return created;
+  },
+
+  async update(id, item) {
+    const appointments =
+      readUserStore(
+        KEYS.appointments,
+        []
+      );
+
+    const next =
+      appointments.map(
+        (appointment) =>
+          appointment.id === id
+            ? {
+                ...appointment,
+                ...item,
+                id,
+              }
+            : appointment
+      );
+
+    writeUserStore(
+      KEYS.appointments,
+      next
+    );
+
+    return next.find(
+      (appointment) =>
+        appointment.id === id
     );
   },
 
-  async remove() {
-    throw new Error(
-      'Appointments are not connected to the current backend yet.'
+  async remove(id) {
+    const appointments =
+      readUserStore(
+        KEYS.appointments,
+        []
+      );
+
+    writeUserStore(
+      KEYS.appointments,
+      appointments.filter(
+        (appointment) =>
+          appointment.id !== id
+      )
     );
+
+    return true;
   },
 };
+
+// ---------------------------------------------------------------------------
+// Checkups
+// ---------------------------------------------------------------------------
 
 export const checkupsApi = {
   async list() {
-    return [];
-  },
-
-  async create() {
-    throw new Error(
-      'Checkups are not connected to the current backend yet.'
+    return readUserStore(
+      KEYS.checkups,
+      []
     );
   },
 
-  async update() {
-    throw new Error(
-      'Checkups are not connected to the current backend yet.'
+  async create(item) {
+    const checkups =
+      readUserStore(
+        KEYS.checkups,
+        []
+      );
+
+    const created = {
+      id: uid(),
+
+      name:
+        item.name?.trim() ||
+        'Checkup',
+
+      nextDue:
+        item.nextDue ||
+        new Date()
+          .toISOString()
+          .slice(0, 7),
+    };
+
+    writeUserStore(
+      KEYS.checkups,
+      [
+        created,
+        ...checkups,
+      ]
+    );
+
+    return created;
+  },
+
+  async update(id, item) {
+    const checkups =
+      readUserStore(
+        KEYS.checkups,
+        []
+      );
+
+    const next =
+      checkups.map(
+        (checkup) =>
+          checkup.id === id
+            ? {
+                ...checkup,
+                ...item,
+                id,
+              }
+            : checkup
+      );
+
+    writeUserStore(
+      KEYS.checkups,
+      next
+    );
+
+    return next.find(
+      (checkup) =>
+        checkup.id === id
     );
   },
 
-  async remove() {
-    throw new Error(
-      'Checkups are not connected to the current backend yet.'
+  async remove(id) {
+    const checkups =
+      readUserStore(
+        KEYS.checkups,
+        []
+      );
+
+    writeUserStore(
+      KEYS.checkups,
+      checkups.filter(
+        (checkup) =>
+          checkup.id !== id
+      )
     );
+
+    return true;
   },
 };
 
+// ---------------------------------------------------------------------------
+// Vitals
+// ---------------------------------------------------------------------------
+
 export const vitalsApi = {
   async list() {
-    return [];
-  },
-
-  async create() {
-    throw new Error(
-      'Vitals are not connected to the current backend yet.'
+    return readUserStore(
+      KEYS.vitals,
+      []
     );
   },
 
-  async update() {
-    throw new Error(
-      'Vitals are not connected to the current backend yet.'
+  async create(item) {
+    const vitals =
+      readUserStore(
+        KEYS.vitals,
+        []
+      );
+
+    const created = {
+      id: uid(),
+      ...item,
+    };
+
+    writeUserStore(
+      KEYS.vitals,
+      [
+        created,
+        ...vitals,
+      ]
+    );
+
+    return created;
+  },
+
+  async update(id, item) {
+    const vitals =
+      readUserStore(
+        KEYS.vitals,
+        []
+      );
+
+    const next =
+      vitals.map(
+        (vital) =>
+          vital.id === id
+            ? {
+                ...vital,
+                ...item,
+                id,
+              }
+            : vital
+      );
+
+    writeUserStore(
+      KEYS.vitals,
+      next
+    );
+
+    return next.find(
+      (vital) =>
+        vital.id === id
     );
   },
 
-  async remove() {
-    throw new Error(
-      'Vitals are not connected to the current backend yet.'
+  async remove(id) {
+    const vitals =
+      readUserStore(
+        KEYS.vitals,
+        []
+      );
+
+    writeUserStore(
+      KEYS.vitals,
+      vitals.filter(
+        (vital) =>
+          vital.id !== id
+      )
     );
+
+    return true;
   },
 };

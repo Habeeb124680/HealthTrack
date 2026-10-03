@@ -18,6 +18,7 @@ import {
   useLocation,
 } from 'react-router-dom';
 import {
+  Activity,
   Calendar as CalendarIcon,
   CalendarClock,
   Check,
@@ -185,12 +186,10 @@ function AuthProvider({ children }) {
     authApi.logout();
     setUser(null);
   }, []);
-  const updateProfile = useCallback((patch) => {
-    setUser((u) => {
-      const next = { ...u, ...patch };
-      localStorage.setItem('healthtrack.user', JSON.stringify(next));
-      return next;
-    });
+  const updateProfile = useCallback(async (patch) => {
+    const next = await authApi.updateProfile(patch);
+    setUser(next);
+    return next;
   }, []);
 
   const value = useMemo(
@@ -241,18 +240,26 @@ function DataProvider({ children }) {
   const refresh = useCallback(async () => {
     setLoading(true);
 
-    try {
-      await routines.load();
+    const results = await Promise.allSettled([
+      routines.load(),
+      medications.load(),
+      appointments.load(),
+      checkups.load(),
+      vitals.load(),
+      logsApi.list(),
+    ]);
 
-      // Routine status logs are stored locally until the backend
-      // exposes a dedicated logs endpoint.
-      setLogs(await logsApi.list());
-    } catch (error) {
-      console.error('Failed to load routines:', error);
-      setLogs([]);
-    } finally {
-      setLoading(false);
+    if (results[0].status === 'rejected') {
+      console.error('Failed to load routines:', results[0].reason);
     }
+    if (results[5].status === 'fulfilled') {
+      setLogs(results[5].value);
+    } else {
+      console.error('Failed to load routine logs:', results[5].reason);
+      setLogs([]);
+    }
+
+    setLoading(false);
 
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -379,9 +386,9 @@ function AuthShell({ children }) {
 
 const ONBOARDING_SLIDES = [
   {
-    icon: <Check size={34} strokeWidth={3} />,
-    title: 'Track Every Routine In One Place',
-    body: 'Medications, appointments, checkups and vitals. All organized together',
+    icon: <Activity size={34} />,
+    title: 'Create & Track Routines',
+    body: 'Add medications, exercise, hydration and more — all managed from one simple dashboard.',
   },
   {
     icon: <span className="onboarding-bang">!</span>,
@@ -395,16 +402,6 @@ function OnboardingPage() {
   const navigate = useNavigate();
   const [step, setStep] = useState(0);
 
-  useEffect(() => {
-    if (user) return undefined;
-
-    const interval = setInterval(() => {
-      setStep((current) => (current + 1) % (ONBOARDING_SLIDES.length + 1));
-    }, 3500);
-
-    return () => clearInterval(interval);
-  }, [user]);
-
   if (user) return <Navigate to="/app" replace />;
 
   const total = ONBOARDING_SLIDES.length + 1;
@@ -414,7 +411,7 @@ function OnboardingPage() {
     <div className="onboarding-shell">
       {isFinal ? (
         <>
-          <div className="onboarding-icon final"><Heart size={30} fill="var(--green)" stroke="var(--green)" /></div>
+          <div className="onboarding-icon final"><Heart size={30} /></div>
           <h1>Health Track</h1>
           <p>Create, schedule, get reminded, and track your health routines all in one place</p>
         </>
@@ -656,11 +653,11 @@ function ProtectedRoute({ children }) {
 }
 
 const TABS = [
-  { to: '/app', label: 'Home', icon: HomeIcon, end: true },
-  { to: '/app/routines', label: 'Routines', icon: CheckSquare },
-  { to: '/app/calendar', label: 'Calendar', icon: CalendarIcon },
-  { to: '/app/progress', label: 'Progress', icon: Triangle },
-  { to: '/app/settings', label: 'Settings', icon: SettingsIcon },
+  { to: '/app', icon: HomeIcon, end: true },
+  { to: '/app/routines', icon: CheckSquare },
+  { to: '/app/calendar', icon: CalendarIcon },
+  { to: '/app/progress', icon: Triangle },
+  { to: '/app/settings', icon: SettingsIcon },
 ];
 
 const NAV_ITEMS = [
@@ -720,10 +717,9 @@ function AppShell({ children }) {
       <div className="app-main">
         <main className="app-content">{children}</main>
         <nav className="bottom-nav">
-          {TABS.map(({ to, label, icon: Icon, end }) => (
+          {TABS.map(({ to, icon: Icon, end }) => (
             <NavLink key={to} to={to} end={end} className={({ isActive }) => `tab ${isActive ? 'active' : ''}`}>
               <span className="tab-icon"><Icon size={20} /></span>
-              <span className="tab-label">{label}</span>
             </NavLink>
           ))}
         </nav>
@@ -848,10 +844,7 @@ function RoutinesPage() {
         <div className="row-list">
           {filtered.map((r) => {
             const status = logFor(r.id, today)?.status;
-            const schedule =
-              r.frequency === 'Daily'
-                ? 'Daily'
-                : `Weekly${r.days?.length ? `, ${r.days.join(', ')}` : ''}`;
+            const schedule = r.frequency === 'Daily' ? 'Daily' : `Weekly, ${r.days.join(', ') || '—'}`;
             return (
               <Link to={`/app/routines/${r.id}/edit`} className="item-row" key={r.id}>
                 <Badge text={typeAbbrev(r.type)} tint="violet" />
@@ -873,306 +866,76 @@ function RoutinesPage() {
 function RoutineFormPage() {
   const { id } = useParams();
   const navigate = useNavigate();
-  const {
-    routines,
-    addRoutine,
-    updateRoutine,
-    removeRoutine,
-  } = useData();
+  const { routines, addRoutine, updateRoutine, removeRoutine } = useData();
+  const existing = id ? routines.find((r) => r.id === id) : null;
 
-  const existing = id
-    ? routines.find((r) => r.id === id)
-    : null;
-
-  const [form, setForm] = useState(() =>
-    existing || {
-      name: '',
-      type: 'Medication',
-      frequency: 'Daily',
-      days: [],
-      time: '08:00',
-      startDate: todayStr(),
-      endDate: todayStr(),
-      active: true,
-      reminder: true,
-      description: '',
-    }
-  );
-
+  const [form, setForm] = useState(() => existing || {
+    name: '', type: 'Medication', frequency: 'Daily', days: [], time: '08:00', startDate: todayStr(), active: true, reminder: true,
+  });
   const [saving, setSaving] = useState(false);
-  const [deleting, setDeleting] = useState(false);
-  const [error, setError] = useState('');
-
-  const update = (patch) => {
-    setForm((current) => ({
-      ...current,
-      ...patch,
-    }));
-  };
+  const update = (patch) => setForm((f) => ({ ...f, ...patch }));
 
   useEffect(() => {
-    if (existing) {
-      setForm({
-        ...existing,
-        endDate: existing.endDate || existing.startDate || todayStr(),
-        description: existing.description || '',
-        days: existing.days || [],
-      });
-    }
+    if (existing) setForm(existing);
   }, [existing]);
 
   const toggleDay = (day) => {
-    const days = form.days.includes(day)
-      ? form.days.filter((d) => d !== day)
-      : [...form.days, day];
-
+    const days = form.days.includes(day) ? form.days.filter((d) => d !== day) : [...form.days, day];
     update({ days });
   };
 
   const onSubmit = async (e) => {
     e.preventDefault();
-    setError('');
-
-    if (!form.name.trim()) {
-      setError('Please enter a routine name.');
-      return;
-    }
-
-    if (!form.startDate) {
-      setError('Please select a start date.');
-      return;
-    }
-
+    if (!form.name.trim()) return;
     setSaving(true);
-
     try {
-      const payload = {
-        ...form,
-        name: form.name.trim(),
-        description:
-          form.description?.trim() ||
-          `${form.name.trim()} routine`,
-        endDate: form.endDate || form.startDate,
-      };
-
-      if (existing) {
-        await updateRoutine(existing.id, payload);
-      } else {
-        await addRoutine(payload);
-      }
-
+      if (existing) await updateRoutine(existing.id, form);
+      else await addRoutine(form);
       navigate('/app/routines');
-    } catch (err) {
-      console.error('Routine save failed:', err);
-      setError(
-        err?.message ||
-        'Could not save the routine. Please try again.'
-      );
     } finally {
       setSaving(false);
     }
   };
 
   const onDelete = async () => {
-    if (!existing) return;
-
-    const confirmed = window.confirm(
-      `Delete "${existing.name}"? This action cannot be undone.`
-    );
-
-    if (!confirmed) return;
-
-    setError('');
-    setDeleting(true);
-
-    try {
-      await removeRoutine(existing.id);
-      navigate('/app/routines');
-    } catch (err) {
-      console.error('Routine delete failed:', err);
-      setError(
-        err?.message ||
-        'Could not delete the routine. Please try again.'
-      );
-    } finally {
-      setDeleting(false);
-    }
+    await removeRoutine(existing.id);
+    navigate('/app/routines');
   };
 
   return (
     <div className="page form-page">
       <BackHeader to="/app/routines" />
-
-      <h1 className="center">
-        {existing ? 'Edit Routine' : 'New Routine'}
-      </h1>
-
+      <h1 className="center">{existing ? 'Edit Routine' : 'New Routine'}</h1>
       <form onSubmit={onSubmit} className="stacked-form">
-        <label>
-          Routine Name
-          <input
-            value={form.name}
-            onChange={(e) =>
-              update({ name: e.target.value })
-            }
-            placeholder="e.g Take Vitamin D"
-            required
-          />
-        </label>
-
+        <label>Routine Name<input value={form.name} onChange={(e) => update({ name: e.target.value })} placeholder="e.g Take Vitamin D" required /></label>
         <label>
           Routine Type
-          <select
-            value={form.type}
-            onChange={(e) =>
-              update({ type: e.target.value })
-            }
-          >
-            {ROUTINE_TYPES.map((type) => (
-              <option key={type} value={type}>
-                {type}
-              </option>
-            ))}
+          <select value={form.type} onChange={(e) => update({ type: e.target.value })}>
+            {ROUTINE_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
           </select>
         </label>
-
-        <label>
-          Description
-          <textarea
-            value={form.description || ''}
-            onChange={(e) =>
-              update({ description: e.target.value })
-            }
-            placeholder="Describe this routine"
-            rows={4}
-          />
-        </label>
-
         <label>
           Frequency
-          <select
-            value={form.frequency}
-            onChange={(e) =>
-              update({
-                frequency: e.target.value,
-                days:
-                  e.target.value === 'Daily'
-                    ? []
-                    : form.days,
-              })
-            }
-          >
+          <select value={form.frequency} onChange={(e) => update({ frequency: e.target.value, days: e.target.value === 'Daily' ? [] : form.days })}>
             <option value="Daily">Daily</option>
             <option value="Weekly">Specific days</option>
           </select>
         </label>
-
         {form.frequency !== 'Daily' && (
           <div className="day-picker">
-            {WEEKDAYS.map((day) => (
-              <button
-                type="button"
-                key={day}
-                className={`day-chip ${
-                  form.days.includes(day)
-                    ? 'active'
-                    : ''
-                }`}
-                onClick={() => toggleDay(day)}
-              >
-                {day}
-              </button>
+            {WEEKDAYS.map((d) => (
+              <button type="button" key={d} className={`day-chip ${form.days.includes(d) ? 'active' : ''}`} onClick={() => toggleDay(d)}>{d}</button>
             ))}
           </div>
         )}
-
-        <label>
-          Time
-          <input
-            type="time"
-            value={form.time}
-            onChange={(e) =>
-              update({ time: e.target.value })
-            }
-            required
-          />
-        </label>
-
-        <label>
-          Start Date
-          <input
-            type="date"
-            value={form.startDate}
-            onChange={(e) =>
-              update({ startDate: e.target.value })
-            }
-            required
-          />
-        </label>
-
-        <label>
-          End Date
-          <input
-            type="date"
-            value={form.endDate || form.startDate}
-            min={form.startDate}
-            onChange={(e) =>
-              update({ endDate: e.target.value })
-            }
-            required
-          />
-        </label>
-
+        <label>Time<input type="time" value={form.time} onChange={(e) => update({ time: e.target.value })} required /></label>
+        <label>Start Date<input type="date" value={form.startDate} onChange={(e) => update({ startDate: e.target.value })} required /></label>
         <div className="switch-row">
           <span>Enable Reminder</span>
-          <Toggle
-            checked={form.reminder}
-            onChange={(value) =>
-              update({ reminder: value })
-            }
-          />
+          <Toggle checked={form.reminder} onChange={(v) => update({ reminder: v })} />
         </div>
-
-        <div className="switch-row">
-          <span>Active</span>
-          <Toggle
-            checked={form.active}
-            onChange={(value) =>
-              update({ active: value })
-            }
-          />
-        </div>
-
-        {error && (
-          <div className="form-error">
-            {error}
-          </div>
-        )}
-
-        <button
-          type="submit"
-          className="btn btn-primary btn-block"
-          disabled={saving || deleting}
-        >
-          {saving
-            ? existing
-              ? 'Updating…'
-              : 'Creating…'
-            : 'Save Routine'}
-        </button>
-
-        {existing && (
-          <button
-            type="button"
-            className="btn btn-danger btn-block"
-            onClick={onDelete}
-            disabled={saving || deleting}
-          >
-            {deleting
-              ? 'Deleting…'
-              : 'Delete Routine'}
-          </button>
-        )}
+        <button type="submit" className="btn btn-primary btn-block" disabled={saving}>{saving ? 'Saving…' : 'Save Routine'}</button>
+        {existing && <button type="button" className="btn btn-danger btn-block" onClick={onDelete}>Delete Routine</button>}
       </form>
     </div>
   );
@@ -1260,6 +1023,13 @@ function CalendarPage() {
 // Medications
 // ---------------------------------------------------------------------------
 
+function formatShortDate(date) {
+  if (!date) return 'Not set';
+  const parsed = new Date(`${date}T00:00:00`);
+  if (Number.isNaN(parsed.getTime())) return date;
+  return parsed.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
+}
+
 function MedicationsPage() {
   const { medications, addMedication, updateMedication, removeMedication, routines, logs, loading } = useData();
   const [modal, setModal] = useState(null);
@@ -1267,7 +1037,13 @@ function MedicationsPage() {
 
   const medRoutineIds = new Set(routines.filter((r) => r.type === 'Medication').map((r) => r.id));
   const takenToday = logs.filter((l) => l.date === today && l.status === 'completed' && medRoutineIds.has(l.routineId)).length;
-  const refillSoon = medications.filter((m) => m.pillsLeft <= m.refillThreshold).length;
+  const endingSoon = medications.filter((m) => {
+    if (!m.endDate) return false;
+    const end = new Date(`${m.endDate}T00:00:00`);
+    const todayDate = new Date(`${today}T00:00:00`);
+    const days = Math.ceil((end - todayDate) / 86400000);
+    return days >= 0 && days <= 7;
+  }).length;
 
   if (loading) return <div className="full-loader">Loading medications…</div>;
 
@@ -1277,7 +1053,7 @@ function MedicationsPage() {
       <div className="stat-grid-3">
         <StatCard label="Active" value={medications.length} />
         <StatCard label="Taken Today" value={`${takenToday}/${medRoutineIds.size}`} />
-        <StatCard label="Refill Soon" value={refillSoon} tone={refillSoon ? 'orange' : undefined} />
+        <StatCard label="Ending Soon" value={endingSoon} tone={endingSoon ? 'orange' : undefined} />
       </div>
 
       <h2 className="section-title">Medication List</h2>
@@ -1285,23 +1061,20 @@ function MedicationsPage() {
         <EmptyState title="No medications yet" />
       ) : (
         <div className="row-list">
-          {medications.map((m) => {
-            const low = m.pillsLeft <= m.refillThreshold;
-            return (
-              <button type="button" key={m.id} className="item-row as-button" onClick={() => setModal({ ...m })}>
-                <Badge text="Rx" tint="violet" />
-                <div className="item-row-body">
-                  <strong>{m.name}</strong>
-                  <span>{m.category} &middot; {m.frequency}</span>
-                </div>
-                <span className={`pill pill-${low ? 'orange' : 'green'}`}>{low ? 'Refill soon' : `${m.pillsLeft} left`}</span>
-              </button>
-            );
-          })}
+          {medications.map((m) => (
+            <button type="button" key={m.id} className="item-row as-button" onClick={() => setModal({ ...m })}>
+              <Badge text="Rx" tint="violet" />
+              <div className="item-row-body">
+                <strong>{m.name}</strong>
+                <span>{m.category || 'General'} &middot; {m.frequency || 'As directed'}</span>
+                <span>Start: {formatShortDate(m.startDate)} &middot; End: {formatShortDate(m.endDate)}</span>
+              </div>
+            </button>
+          ))}
         </div>
       )}
 
-      <Fab onClick={() => setModal({ name: '', category: '', frequency: '', pillsLeft: 30, refillThreshold: 5 })} />
+      <Fab onClick={() => setModal({ name: '', category: '', frequency: '', startDate: todayStr(), endDate: '' })} />
 
       {modal && (
         <ModalSheet title={modal.id ? 'Edit Medication' : 'New Medication'} onClose={() => setModal(null)}>
@@ -1327,6 +1100,7 @@ function MedicationForm({ value, onSave, onCancel, onDelete }) {
   const update = (patch) => setForm((f) => ({ ...f, ...patch }));
   const submit = async (e) => {
     e.preventDefault();
+    if (form.endDate && form.startDate && form.endDate < form.startDate) return;
     setSaving(true);
     try { await onSave(form); } finally { setSaving(false); }
   };
@@ -1334,10 +1108,10 @@ function MedicationForm({ value, onSave, onCancel, onDelete }) {
     <form onSubmit={submit} className="modal-form">
       <label>Name<input value={form.name} onChange={(e) => update({ name: e.target.value })} placeholder="e.g. Lisinopril 10mg" required /></label>
       <label>Category<input value={form.category} onChange={(e) => update({ category: e.target.value })} placeholder="e.g. Blood pressure" /></label>
-      <label>Frequency<input value={form.frequency} onChange={(e) => update({ frequency: e.target.value })} placeholder="e.g. 2x daily" /></label>
+      <label>Frequency<input value={form.frequency} onChange={(e) => update({ frequency: e.target.value })} placeholder="e.g. 2x daily or as directed" /></label>
       <div className="field-row">
-        <label>Pills left<input type="number" min="0" value={form.pillsLeft} onChange={(e) => update({ pillsLeft: Number(e.target.value) })} /></label>
-        <label>Refill at<input type="number" min="0" value={form.refillThreshold} onChange={(e) => update({ refillThreshold: Number(e.target.value) })} /></label>
+        <label>Start day<input type="date" value={form.startDate || ''} onChange={(e) => update({ startDate: e.target.value })} required /></label>
+        <label>End day<input type="date" value={form.endDate || ''} min={form.startDate || undefined} onChange={(e) => update({ endDate: e.target.value })} /></label>
       </div>
       <div className="modal-actions">
         {onDelete && <button type="button" className="btn btn-danger" onClick={onDelete}><Trash2 size={15} /></button>}
@@ -1674,6 +1448,7 @@ function SettingsPage() {
   const { theme, toggleTheme } = useTheme();
   const navigate = useNavigate();
   const [editOpen, setEditOpen] = useState(false);
+  const [savingProfile, setSavingProfile] = useState(false);
   const [reminderPref, setReminderPref] = useState(() => localStorage.getItem('healthtrack.reminderPref') !== 'off');
   const [emailPref, setEmailPref] = useState(() => localStorage.getItem('healthtrack.emailPref') !== 'off');
 
@@ -1719,24 +1494,41 @@ function SettingsPage() {
       </button>
 
       {editOpen && (
-        <ModalSheet title="Edit Profile" onClose={() => setEditOpen(false)}>
-          <EditProfileForm user={user} onCancel={() => setEditOpen(false)} onSave={(patch) => { updateProfile(patch); setEditOpen(false); }} />
+        <ModalSheet title="Edit Profile" onClose={() => !savingProfile && setEditOpen(false)}>
+          <EditProfileForm
+            user={user}
+            saving={savingProfile}
+            onCancel={() => !savingProfile && setEditOpen(false)}
+            onSave={async (patch) => {
+              setSavingProfile(true);
+              try {
+                await updateProfile(patch);
+                setEditOpen(false);
+              } catch (error) {
+                console.error('Failed to update profile:', error);
+              } finally {
+                setSavingProfile(false);
+              }
+            }}
+          />
         </ModalSheet>
       )}
     </div>
   );
 }
 
-function EditProfileForm({ user, onSave, onCancel }) {
+function EditProfileForm({ user, onSave, onCancel, saving = false }) {
   const [name, setName] = useState(user?.name || '');
   const [email, setEmail] = useState(user?.email || '');
   return (
-    <form className="modal-form" onSubmit={(e) => { e.preventDefault(); onSave({ name, email }); }}>
+    <form className="modal-form" onSubmit={(e) => { e.preventDefault(); onSave({ name: name.trim(), email: email.trim() }); }}>
       <label>Name<input value={name} onChange={(e) => setName(e.target.value)} required /></label>
       <label>Email<input type="email" value={email} onChange={(e) => setEmail(e.target.value)} required /></label>
       <div className="modal-actions">
-        <button type="button" className="btn btn-ghost" onClick={onCancel}>Cancel</button>
-        <button type="submit" className="btn btn-primary">Save</button>
+        <button type="button" className="btn btn-ghost" onClick={onCancel} disabled={saving}>Cancel</button>
+        <button type="submit" className="btn btn-primary" disabled={saving || !name.trim() || !email.trim()}>
+          {saving ? 'Saving…' : 'Save'}
+        </button>
       </div>
     </form>
   );
