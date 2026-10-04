@@ -44,10 +44,6 @@ import {
   authApi,
   routinesApi,
   logsApi,
-  medicationsApi,
-  appointmentsApi,
-  checkupsApi,
-  vitalsApi,
 } from './api';
 import './App.css';
 
@@ -55,7 +51,7 @@ import './App.css';
 // Helpers
 // ---------------------------------------------------------------------------
 
-const ROUTINE_TYPES = ['Medication', 'Exercise', 'Hydration', 'Sleep', 'Nutrition', 'Appointment', 'Other'];
+const ROUTINE_TYPES = ['Medication', 'Exercise', 'Hydration', 'Sleep', 'Nutrition', 'Appointment', 'Checkup', 'Vitals', 'Other'];
 const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 const WEEKDAY_FULL = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
 const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
@@ -66,10 +62,6 @@ const todayStr = () => new Date().toISOString().slice(0, 10);
 function typeAbbrev(type) {
   const map = { Medication: 'Rx', Exercise: 'Ex', Hydration: 'H2O', Sleep: 'Zz', Nutrition: 'Nt', Appointment: 'Ap', Other: 'Ot' };
   return map[type] || type.slice(0, 2);
-}
-
-function routineNameKey(value) {
-  return String(value || '').trim().toLowerCase();
 }
 function calendarColor(type) {
   const map = { Medication: 'green', Exercise: 'orange', Hydration: 'blue', Appointment: 'violet', Sleep: 'violet', Nutrition: 'violet', Other: 'violet' };
@@ -112,10 +104,31 @@ function monthYearLabel(ym) {
 
 function isScheduledOn(routine, dateStr) {
   if (!routine.active) return false;
+
   const date = new Date(`${dateStr}T00:00:00`);
-  const start = new Date(`${routine.startDate}T00:00:00`);
-  if (Number.isNaN(date.getTime()) || Number.isNaN(start.getTime()) || date < start) return false;
+  const start = new Date(`${routine.startDate || dateStr}T00:00:00`);
+  const end = routine.endDate
+    ? new Date(`${routine.endDate}T23:59:59`)
+    : null;
+
+  if (Number.isNaN(date.getTime()) || Number.isNaN(start.getTime())) return false;
+  if (date < start) return false;
+  if (end && !Number.isNaN(end.getTime()) && date > end) return false;
+
   if (routine.frequency === 'Daily') return true;
+
+  if (
+    ['Every hour', 'Every two hours', 'Every six hours', 'Every eight hours'].includes(
+      routine.frequency,
+    )
+  ) {
+    return true;
+  }
+
+  if (routine.frequency === 'Monthly') {
+    return date.getDate() === start.getDate();
+  }
+
   return routine.days?.includes(WEEKDAYS[date.getDay()]) ?? false;
 }
 
@@ -181,15 +194,18 @@ function AuthProvider({ children }) {
     setUser(u);
     return u;
   }, []);
+
   const register = useCallback(async (name, email, password) => {
     const { user: u } = await authApi.register({ name, email, password });
     setUser(u);
     return u;
   }, []);
+
   const logout = useCallback(() => {
     authApi.logout();
     setUser(null);
   }, []);
+
   const updateProfile = useCallback(async (patch) => {
     const next = await authApi.updateProfile(patch);
     setUser(next);
@@ -197,11 +213,22 @@ function AuthProvider({ children }) {
   }, []);
 
   const value = useMemo(
-    () => ({ user, loading, login, register, logout, updateProfile, resetEmail, setResetEmail }),
+    () => ({
+      user,
+      loading,
+      login,
+      register,
+      logout,
+      updateProfile,
+      resetEmail,
+      setResetEmail,
+    }),
     [user, loading, login, register, logout, updateProfile, resetEmail],
   );
+
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }
+
 const useAuth = () => useContext(AuthContext);
 
 // ---------------------------------------------------------------------------
@@ -236,242 +263,111 @@ function DataProvider({ children }) {
   const [loading, setLoading] = useState(true);
 
   const routines = useCrudState(routinesApi);
-  const medications = useCrudState(medicationsApi);
-  const appointments = useCrudState(appointmentsApi);
-  const checkups = useCrudState(checkupsApi);
-  const vitals = useCrudState(vitalsApi);
 
   const refresh = useCallback(async () => {
     setLoading(true);
 
     const results = await Promise.allSettled([
       routines.load(),
-      medications.load(),
-      appointments.load(),
-      checkups.load(),
-      vitals.load(),
       logsApi.list(),
     ]);
 
     if (results[0].status === 'rejected') {
-      console.error(
-        'Failed to load routines:',
-        results[0].reason,
-      );
+      console.error('Failed to load routines:', results[0].reason);
     }
 
-    if (results[1].status === 'rejected') {
-      console.error(
-        'Failed to load medications:',
-        results[1].reason,
-      );
-    }
-
-    if (results[5].status === 'fulfilled') {
-      setLogs(results[5].value);
+    if (results[1].status === 'fulfilled') {
+      setLogs(results[1].value);
     } else {
-      console.error(
-        'Failed to load routine logs:',
-        results[5].reason,
-      );
+      console.error('Failed to load routine logs:', results[1].reason);
       setLogs([]);
     }
 
-    // Synchronize existing medications into the shared
-    // routine collection once per user. This fixes existing
-    // medications such as Amaril 2mg without recreating
-    // a routine every time the app is refreshed.
-    if (
-      user &&
-      results[0].status === 'fulfilled' &&
-      results[1].status === 'fulfilled'
-    ) {
-      const userKey =
-        user.id ||
-        user._id ||
-        user.email ||
-        'guest';
-
-      const migrationKey =
-        `healthtrack.medication-routines-migrated.${encodeURIComponent(String(userKey))}`;
-
-      if (
-        localStorage.getItem(migrationKey) !== 'done'
-      ) {
-        const loadedRoutines =
-          Array.isArray(results[0].value)
-            ? results[0].value
-            : [];
-
-        const loadedMedications =
-          Array.isArray(results[1].value)
-            ? results[1].value
-            : [];
-
-        const existingMedicationNames =
-          new Set(
-            loadedRoutines
-              .filter(
-                (r) =>
-                  r.type === 'Medication',
-              )
-              .map((r) =>
-                routineNameKey(r.name),
-              ),
-          );
-
-        try {
-          localStorage.setItem(
-            `${migrationKey}.running`,
-            '1',
-          );
-
-          for (
-            const medication of loadedMedications
-          ) {
-            const nameKey =
-              routineNameKey(
-                medication.name,
-              );
-
-            if (
-              !nameKey ||
-              existingMedicationNames.has(
-                nameKey,
-              )
-            ) {
-              continue;
-            }
-
-            await routines.add({
-              name: medication.name,
-              type: 'Medication',
-              frequency:
-                medication.frequency ||
-                'Daily',
-              days: [],
-              time: '08:00',
-              startDate:
-                medication.startDate ||
-                todayStr(),
-              endDate:
-                medication.endDate ||
-                '',
-              active: true,
-              reminder: true,
-              description:
-                medication.category
-                  ? `${medication.category} medication`
-                  : 'Medication routine',
-            });
-
-            existingMedicationNames.add(
-              nameKey,
-            );
-          }
-
-          localStorage.setItem(
-            migrationKey,
-            'done',
-          );
-        } catch (error) {
-          console.error(
-            'Failed to synchronize medication routines:',
-            error,
-          );
-        } finally {
-          localStorage.removeItem(
-            `${migrationKey}.running`,
-          );
-        }
-      }
-    }
-
     setLoading(false);
-  }, [
-    user,
-    routines.load,
-    routines.add,
-    medications.load,
-    appointments.load,
-    checkups.load,
-    vitals.load,
-  ]);
+  }, [routines.load]);
 
   useEffect(() => {
     if (user) {
       refresh();
+    } else {
+      setLogs([]);
     }
   }, [user, refresh]);
 
-  const logStatus = useCallback(
-    async (
-      routineId,
-      date,
-      status,
-    ) => {
-      const entry =
-        await logsApi.record({
-          routineId,
-          date,
-          status,
-        });
-
-      setLogs((prev) => [
-        entry,
-        ...prev.filter(
-          (l) =>
-            !(
-              l.routineId ===
-                routineId &&
-              l.date === date
-            ),
-        ),
-      ]);
-
-      return entry;
-    },
-    [],
-  );
+  const logStatus = useCallback(async (routineId, date, status) => {
+    const entry = await logsApi.record({ routineId, date, status });
+    setLogs((prev) => [
+      entry,
+      ...prev.filter(
+        (l) => !(l.routineId === routineId && l.date === date),
+      ),
+    ]);
+    return entry;
+  }, []);
 
   const logFor = useCallback(
     (routineId, date) =>
       logs.find(
-        (l) =>
-          l.routineId === routineId &&
-          l.date === date,
+        (l) => l.routineId === routineId && l.date === date,
       ) || null,
     [logs],
+  );
+
+  const addCategoryRoutine = useCallback(
+    async (type, item) => {
+      const created = await routines.add({
+        ...item,
+        type,
+        name: item.name || item.title || 'Health routine',
+      });
+      return created;
+    },
+    [routines.add],
+  );
+
+  const updateCategoryRoutine = useCallback(
+    async (id, type, item) => {
+      return routines.update(id, {
+        ...item,
+        type,
+        name: item.name || item.title || 'Health routine',
+      });
+    },
+    [routines.update],
+  );
+
+  const removeCategoryRoutine = useCallback(
+    async (id) => routines.remove(id),
+    [routines.remove],
   );
 
   const value = useMemo(
     () => ({
       loading,
-
       routines: routines.items,
       addRoutine: routines.add,
       updateRoutine: routines.update,
       removeRoutine: routines.remove,
 
-      medications: medications.items,
-      addMedication: medications.add,
-      updateMedication: medications.update,
-      removeMedication: medications.remove,
+      addMedication: (item) => addCategoryRoutine('Medication', item),
+      updateMedication: (id, item) =>
+        updateCategoryRoutine(id, 'Medication', item),
+      removeMedication: removeCategoryRoutine,
 
-      appointments: appointments.items,
-      addAppointment: appointments.add,
-      updateAppointment: appointments.update,
-      removeAppointment: appointments.remove,
+      addAppointment: (item) => addCategoryRoutine('Appointment', item),
+      updateAppointment: (id, item) =>
+        updateCategoryRoutine(id, 'Appointment', item),
+      removeAppointment: removeCategoryRoutine,
 
-      checkups: checkups.items,
-      addCheckup: checkups.add,
-      updateCheckup: checkups.update,
-      removeCheckup: checkups.remove,
+      addCheckup: (item) => addCategoryRoutine('Checkup', item),
+      updateCheckup: (id, item) =>
+        updateCategoryRoutine(id, 'Checkup', item),
+      removeCheckup: removeCategoryRoutine,
 
-      vitals: vitals.items,
-      addVital: vitals.add,
-      updateVital: vitals.update,
-      removeVital: vitals.remove,
+      addVital: (item) => addCategoryRoutine('Vitals', item),
+      updateVital: (id, item) =>
+        updateCategoryRoutine(id, 'Vitals', item),
+      removeVital: removeCategoryRoutine,
 
       logs,
       logStatus,
@@ -480,25 +376,22 @@ function DataProvider({ children }) {
     [
       loading,
       routines.items,
-      medications.items,
-      appointments.items,
-      checkups.items,
-      vitals.items,
+      routines.add,
+      routines.update,
+      routines.remove,
+      addCategoryRoutine,
+      updateCategoryRoutine,
+      removeCategoryRoutine,
       logs,
       logStatus,
       logFor,
     ],
   );
 
-  return (
-    <DataContext.Provider value={value}>
-      {children}
-    </DataContext.Provider>
-  );
+  return <DataContext.Provider value={value}>{children}</DataContext.Provider>;
 }
 
 const useData = () => useContext(DataContext);
-
 
 // ---------------------------------------------------------------------------
 // Shared UI
@@ -1028,30 +921,14 @@ function DashboardPage() {
 // ---------------------------------------------------------------------------
 
 function RoutinesPage() {
-  const { user } = useAuth();
   const { routines, logFor, logStatus, loading } = useData();
   const [filter, setFilter] = useState('All');
   const today = todayStr();
 
-  const currentUserId = String(
-    user?.id ||
-    user?._id ||
-    user?.email ||
-    ''
-  );
-
-  const ownedRoutines = routines.filter(
-    (routine) =>
-      !routine.ownerId ||
-      String(routine.ownerId) === currentUserId
-  );
-
   const filtered =
     filter === 'All'
-      ? ownedRoutines
-      : ownedRoutines.filter(
-          (r) => r.type === filter
-        );
+      ? routines
+      : routines.filter((r) => r.type === filter);
 
   if (loading) return <div className="full-loader">Loading routines…</div>;
 
@@ -1060,30 +937,68 @@ function RoutinesPage() {
       <h1 className="page-title">All Routines</h1>
       <div className="chip-row">
         {['All', ...ROUTINE_TYPES].map((t) => (
-          <button key={t} type="button" className={`chip ${filter === t ? 'active' : ''}`} onClick={() => setFilter(t)}>{t}</button>
+          <button
+            key={t}
+            type="button"
+            className={`chip ${filter === t ? 'active' : ''}`}
+            onClick={() => setFilter(t)}
+          >
+            {t}
+          </button>
         ))}
       </div>
 
       {filtered.length === 0 ? (
-        <EmptyState title="No routines yet" body="Tap + to create your first routine." />
+        <EmptyState
+          title="No routines yet"
+          body="Tap + to create your first routine."
+        />
       ) : (
         <div className="row-list">
           {filtered.map((r) => {
             const status = logFor(r.id, today)?.status;
-            const schedule = r.frequency === 'Daily' ? 'Daily' : `Weekly, ${r.days.join(', ') || '—'}`;
+            const schedule =
+              r.frequency === 'Weekly' && r.days?.length
+                ? `Weekly, ${r.days.join(', ')}`
+                : r.frequency;
+
             return (
-              <Link to={`/app/routines/${r.id}/edit`} className="item-row" key={r.id}>
+              <Link
+                to={`/app/routines/${r.id}/edit`}
+                className="item-row"
+                key={r.id}
+              >
                 <Badge text={typeAbbrev(r.type)} tint="violet" />
                 <div className="item-row-body">
                   <strong>{r.name}</strong>
-                  <span>{r.type} &middot; {schedule}, {formatTime12(r.time)}</span>
+                  <span>
+                    {r.type} &middot; {schedule}
+                    {r.time ? `, ${formatTime12(r.time)}` : ''}
+                  </span>
+                  {(r.startDate || r.endDate) && (
+                    <span>
+                      {formatShortDate(r.startDate)}
+                      {r.endDate ? ` → ${formatShortDate(r.endDate)}` : ''}
+                    </span>
+                  )}
                 </div>
-                <StatusPill status={status} onClick={(e) => { e.preventDefault(); logStatus(r.id, today, status === 'completed' ? 'missed' : 'completed'); }} />
+                <StatusPill
+                  status={status}
+                  onClick={(e) => {
+                    e.preventDefault();
+                    logStatus(
+                      r.id,
+                      today,
+                      status === 'completed' ? 'missed' : 'completed',
+                    );
+                  }}
+                />
               </Link>
             );
           })}
         </div>
       )}
+
       <Fab to="/app/routines/new" />
     </div>
   );
@@ -1092,40 +1007,38 @@ function RoutinesPage() {
 function RoutineFormPage() {
   const { id } = useParams();
   const navigate = useNavigate();
-  const {
-    routines,
-    addRoutine,
-    updateRoutine,
-    removeRoutine,
-  } = useData();
+  const { routines, addRoutine, updateRoutine, removeRoutine } = useData();
+  const existing = id ? routines.find((r) => r.id === id) : null;
 
-  const existing = id
-    ? routines.find((r) => r.id === id)
-    : null;
-
-  const [form, setForm] = useState(
-    () =>
-      existing || {
-        name: '',
-        type: 'Medication',
-        frequency: 'Daily',
-        days: [],
-        time: '08:00',
-        startDate: todayStr(),
-        active: true,
-        reminder: true,
-      },
+  const [form, setForm] = useState(() =>
+    existing || {
+      name: '',
+      type: 'Medication',
+      description: '',
+      frequency: 'Daily',
+      days: [],
+      time: '08:00',
+      startDate: todayStr(),
+      endDate: todayStr(),
+      active: true,
+      reminder: true,
+    },
   );
 
   const [saving, setSaving] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const [error, setError] = useState('');
 
-  const update = (patch) =>
-    setForm((f) => ({ ...f, ...patch }));
+  const update = (patch) => setForm((f) => ({ ...f, ...patch }));
 
   useEffect(() => {
     if (existing) {
-      setForm(existing);
+      setForm({
+        ...existing,
+        description: existing.description || '',
+        days: existing.days || [],
+        endDate: existing.endDate || existing.startDate || todayStr(),
+      });
     }
   }, [existing]);
 
@@ -1139,66 +1052,69 @@ function RoutineFormPage() {
 
   const onSubmit = async (e) => {
     e.preventDefault();
+    setError('');
 
     if (!form.name.trim()) {
+      setError('Please enter a title.');
+      return;
+    }
+
+    if (!form.description.trim()) {
+      setError('Please enter a description.');
+      return;
+    }
+
+    if (!form.startDate || !form.endDate) {
+      setError('Please select both start and end dates.');
+      return;
+    }
+
+    if (form.endDate < form.startDate) {
+      setError('End date cannot be before start date.');
+      return;
+    }
+
+    if (
+      form.frequency === 'Weekly' &&
+      (!form.days || form.days.length === 0)
+    ) {
+      setError('Select at least one day for a weekly routine.');
       return;
     }
 
     setSaving(true);
 
     try {
+      const payload = {
+        ...form,
+        name: form.name.trim(),
+        description: form.description.trim(),
+      };
+
       if (existing) {
-        await updateRoutine(
-          existing.id,
-          form,
-        );
+        await updateRoutine(existing.id, payload);
       } else {
-        await addRoutine(form);
+        await addRoutine(payload);
       }
 
       navigate('/app/routines');
-    } catch (error) {
-      console.error(
-        'Failed to save routine:',
-        error,
-      );
+    } catch (err) {
+      console.error('Routine save failed:', err);
+      setError(err?.message || 'Could not save the routine.');
     } finally {
       setSaving(false);
     }
   };
 
   const onDelete = async () => {
-    if (!existing || deleting) {
-      return;
-    }
-
-    const confirmed =
-      window.confirm(
-        `Delete "${existing.name}"? This cannot be undone.`,
-      );
-
-    if (!confirmed) {
-      return;
-    }
+    if (!existing) return;
 
     setDeleting(true);
-
     try {
-      await removeRoutine(
-        existing.id,
-      );
-
-      navigate('/app/routines', {
-        replace: true,
-      });
-    } catch (error) {
-      console.error(
-        'Failed to delete routine:',
-        error,
-      );
-      window.alert(
-        'The routine could not be deleted. Please try again.',
-      );
+      await removeRoutine(existing.id);
+      navigate('/app/routines');
+    } catch (err) {
+      setError(err?.message || 'Could not delete the routine.');
     } finally {
       setDeleting(false);
     }
@@ -1207,27 +1123,26 @@ function RoutineFormPage() {
   return (
     <div className="page form-page">
       <BackHeader to="/app/routines" />
+      <h1 className="center">{existing ? 'Edit Routine' : 'New Routine'}</h1>
 
-      <h1 className="center">
-        {existing
-          ? 'Edit Routine'
-          : 'New Routine'}
-      </h1>
-
-      <form
-        onSubmit={onSubmit}
-        className="stacked-form"
-      >
+      <form onSubmit={onSubmit} className="stacked-form">
         <label>
-          Routine Name
+          Title
           <input
             value={form.name}
-            onChange={(e) =>
-              update({
-                name: e.target.value,
-              })
-            }
-            placeholder="e.g Take Vitamin D"
+            onChange={(e) => update({ name: e.target.value })}
+            placeholder="e.g. Take Vitamin D"
+            required
+          />
+        </label>
+
+        <label>
+          Description
+          <textarea
+            value={form.description}
+            onChange={(e) => update({ description: e.target.value })}
+            placeholder="Describe what this routine is for"
+            rows={4}
             required
           />
         </label>
@@ -1236,19 +1151,10 @@ function RoutineFormPage() {
           Routine Type
           <select
             value={form.type}
-            onChange={(e) =>
-              update({
-                type: e.target.value,
-              })
-            }
+            onChange={(e) => update({ type: e.target.value })}
           >
             {ROUTINE_TYPES.map((t) => (
-              <option
-                key={t}
-                value={t}
-              >
-                {t}
-              </option>
+              <option key={t} value={t}>{t}</option>
             ))}
           </select>
         </label>
@@ -1260,36 +1166,29 @@ function RoutineFormPage() {
             onChange={(e) =>
               update({
                 frequency: e.target.value,
-                days:
-                  e.target.value === 'Daily'
-                    ? []
-                    : form.days,
+                days: e.target.value === 'Weekly' ? form.days : [],
               })
             }
           >
-            <option value="Daily">
-              Daily
-            </option>
-            <option value="Weekly">
-              Specific days
-            </option>
+            <option value="Daily">Daily</option>
+            <option value="Weekly">Weekly</option>
+            <option value="Monthly">Monthly</option>
+            <option value="Forthnightly">Forthnightly</option>
+            <option value="Every hour">Every hour</option>
+            <option value="Every two hours">Every two hours</option>
+            <option value="Every six hours">Every six hours</option>
+            <option value="Every eight hours">Every eight hours</option>
           </select>
         </label>
 
-        {form.frequency !== 'Daily' && (
+        {form.frequency === 'Weekly' && (
           <div className="day-picker">
             {WEEKDAYS.map((d) => (
               <button
                 type="button"
                 key={d}
-                className={`day-chip ${
-                  form.days.includes(d)
-                    ? 'active'
-                    : ''
-                }`}
-                onClick={() =>
-                  toggleDay(d)
-                }
+                className={`day-chip ${form.days.includes(d) ? 'active' : ''}`}
+                onClick={() => toggleDay(d)}
               >
                 {d}
               </button>
@@ -1302,53 +1201,50 @@ function RoutineFormPage() {
           <input
             type="time"
             value={form.time}
-            onChange={(e) =>
-              update({
-                time: e.target.value,
-              })
-            }
+            onChange={(e) => update({ time: e.target.value })}
             required
           />
         </label>
 
-        <label>
-          Start Date
-          <input
-            type="date"
-            value={form.startDate}
-            onChange={(e) =>
-              update({
-                startDate:
-                  e.target.value,
-              })
-            }
-            required
-          />
-        </label>
+        <div className="field-row">
+          <label>
+            Start Date
+            <input
+              type="date"
+              value={form.startDate || ''}
+              onChange={(e) => update({ startDate: e.target.value })}
+              required
+            />
+          </label>
+
+          <label>
+            End Date
+            <input
+              type="date"
+              min={form.startDate || undefined}
+              value={form.endDate || ''}
+              onChange={(e) => update({ endDate: e.target.value })}
+              required
+            />
+          </label>
+        </div>
 
         <div className="switch-row">
-          <span>
-            Enable Reminder
-          </span>
-
+          <span>Enable Reminder</span>
           <Toggle
             checked={form.reminder}
-            onChange={(v) =>
-              update({
-                reminder: v,
-              })
-            }
+            onChange={(v) => update({ reminder: v })}
           />
         </div>
+
+        {error && <div className="form-error">{error}</div>}
 
         <button
           type="submit"
           className="btn btn-primary btn-block"
-          disabled={saving || deleting}
+          disabled={saving}
         >
-          {saving
-            ? 'Saving…'
-            : 'Save Routine'}
+          {saving ? 'Saving…' : 'Save Routine'}
         </button>
 
         {existing && (
@@ -1356,18 +1252,15 @@ function RoutineFormPage() {
             type="button"
             className="btn btn-danger btn-block"
             onClick={onDelete}
-            disabled={saving || deleting}
+            disabled={deleting}
           >
-            {deleting
-              ? 'Deleting…'
-              : 'Delete Routine'}
+            {deleting ? 'Deleting…' : 'Delete Routine'}
           </button>
         )}
       </form>
     </div>
   );
 }
-
 
 // ---------------------------------------------------------------------------
 // Calendar
@@ -1447,313 +1340,196 @@ function CalendarPage() {
   );
 }
 
-// ---------------------------------------------------------------------------
-// Medications
-// ---------------------------------------------------------------------------
-
 function formatShortDate(date) {
   if (!date) return 'Not set';
   const parsed = new Date(`${date}T00:00:00`);
   if (Number.isNaN(parsed.getTime())) return date;
-  return parsed.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
+  return parsed.toLocaleDateString(undefined, {
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+  });
 }
 
-function MedicationsPage() {
-  const { user } = useAuth();
-  const {
-    medications,
-    addMedication,
-    updateMedication,
-    removeMedication,
-    routines,
-    addRoutine,
-    logs,
-    loading,
-  } = useData();
-  const [modal, setModal] = useState(null);
-  const today = todayStr();
-  const medRoutineIds = new Set(
-    routines
-      .filter((r) => r.type === 'Medication')
-      .map((r) => r.id),
-  );
+// ---------------------------------------------------------------------------
+// Shared category routine pages
+// ---------------------------------------------------------------------------
 
-  const takenToday = logs.filter(
-    (l) =>
-      l.date === today &&
-      l.status === 'completed' &&
-      medRoutineIds.has(l.routineId),
-  ).length;
-
-  const endingSoon = medications.filter((m) => {
-    if (!m.endDate) return false;
-    const end = new Date(`${m.endDate}T00:00:00`);
-    const todayDate = new Date(`${today}T00:00:00`);
-    const days = Math.ceil((end - todayDate) / 86400000);
-    return days >= 0 && days <= 7;
-  }).length;
-
-  if (loading) {
-    return (
-      <div className="full-loader">
-        Loading medications…
-      </div>
-    );
-  }
-
-  return (
-    <div className="page">
-      <h1 className="page-title">Medications</h1>
-
-      <div className="stat-grid-3">
-        <StatCard
-          label="Active"
-          value={medications.length}
-        />
-        <StatCard
-          label="Taken Today"
-          value={`${takenToday}/${medRoutineIds.size}`}
-        />
-        <StatCard
-          label="Ending Soon"
-          value={endingSoon}
-          tone={endingSoon ? 'orange' : undefined}
-        />
-      </div>
-
-      <h2 className="section-title">Medication List</h2>
-
-      {medications.length === 0 ? (
-        <EmptyState title="No medications yet" />
-      ) : (
-        <div className="row-list">
-          {medications.map((m) => (
-            <button
-              type="button"
-              key={m.id}
-              className="item-row as-button"
-              onClick={() => setModal({ ...m })}
-            >
-              <Badge text="Rx" tint="violet" />
-
-              <div className="item-row-body">
-                <strong>{m.name}</strong>
-                <span>
-                  {m.category || 'General'}
-                  {' · '}
-                  {m.frequency || 'As directed'}
-                </span>
-                <span>
-                  Start: {formatShortDate(m.startDate)}
-                  {' · '}
-                  End: {formatShortDate(m.endDate)}
-                </span>
-              </div>
-            </button>
-          ))}
-        </div>
-      )}
-
-      <Fab
-        onClick={() =>
-          setModal({
-            name: '',
-            category: '',
-            frequency: '',
-            startDate: todayStr(),
-            endDate: '',
-          })
-        }
-      />
-
-      {modal && (
-        <ModalSheet
-          title={
-            modal.id
-              ? 'Edit Medication'
-              : 'New Medication'
-          }
-          onClose={() => setModal(null)}
-        >
-          <MedicationForm
-            value={modal}
-            onCancel={() => setModal(null)}
-            onDelete={
-              modal.id
-                ? async () => {
-                    await removeMedication(modal.id);
-                    setModal(null);
-                  }
-                : null
-            }
-            onSave={async (data) => {
-              if (modal.id) {
-                await updateMedication(
-                  modal.id,
-                  data,
-                );
-              } else {
-                const createdMedication =
-                  await addMedication(data);
-
-                const nameKey =
-                  routineNameKey(
-                    createdMedication?.name ||
-                      data.name,
-                  );
-
-                const routineAlreadyExists =
-                  routines.some(
-                    (routine) =>
-                      routine.type ===
-                        'Medication' &&
-                      routineNameKey(
-                        routine.name,
-                      ) === nameKey,
-                  );
-
-                if (
-                  !routineAlreadyExists &&
-                  nameKey
-                ) {
-                  await addRoutine({
-                    name:
-                      createdMedication?.name ||
-                      data.name,
-                    type: 'Medication',
-                    frequency:
-                      createdMedication?.frequency ||
-                      data.frequency ||
-                      'Daily',
-                    days: [],
-                    time: '08:00',
-                    startDate:
-                      createdMedication?.startDate ||
-                      data.startDate ||
-                      today,
-                    endDate:
-                      createdMedication?.endDate ||
-                      data.endDate ||
-                      '',
-                    active: true,
-                    reminder: true,
-                    description:
-                      createdMedication?.category ||
-                      data.category
-                        ? `${
-                            createdMedication?.category ||
-                            data.category
-                          } medication`
-                        : 'Medication routine',
-                  });
-                }
-              }
-
-              setModal(null);
-            }}
-          />
-        </ModalSheet>
-      )}
-    </div>
-  );
-}
-
-function MedicationForm({ value, onSave, onCancel, onDelete }) {
-  const [form, setForm] = useState(value);
+function CategoryRoutineForm({ value, type, onSave, onCancel, onDelete }) {
+  const [form, setForm] = useState(() => ({
+    name: value.name || '',
+    description: value.description || '',
+    frequency: value.frequency || 'Daily',
+    days: value.days || [],
+    time: value.time || '08:00',
+    startDate: value.startDate || todayStr(),
+    endDate: value.endDate || value.startDate || todayStr(),
+    active: value.active ?? true,
+    reminder: value.reminder ?? true,
+  }));
   const [saving, setSaving] = useState(false);
-  const update = (patch) =>
-    setForm((f) => ({ ...f, ...patch }));
+  const [error, setError] = useState('');
+
+  const update = (patch) => setForm((f) => ({ ...f, ...patch }));
+
+  const toggleDay = (day) => {
+    update({
+      days: form.days.includes(day)
+        ? form.days.filter((d) => d !== day)
+        : [...form.days, day],
+    });
+  };
 
   const submit = async (e) => {
     e.preventDefault();
+    setError('');
+
+    if (!form.name.trim()) {
+      setError('Please enter a title.');
+      return;
+    }
+
+    if (!form.description.trim()) {
+      setError('Please enter a description.');
+      return;
+    }
+
+    if (!form.startDate || !form.endDate) {
+      setError('Please select both start and end dates.');
+      return;
+    }
+
+    if (form.endDate < form.startDate) {
+      setError('End date cannot be before start date.');
+      return;
+    }
 
     if (
-      form.endDate &&
-      form.startDate &&
-      form.endDate < form.startDate
+      form.frequency === 'Weekly' &&
+      form.days.length === 0
     ) {
+      setError('Select at least one day for a weekly routine.');
       return;
     }
 
     setSaving(true);
 
     try {
-      await onSave(form);
+      await onSave({
+        ...form,
+        name: form.name.trim(),
+        description: form.description.trim(),
+        type,
+      });
+    } catch (err) {
+      setError(err?.message || 'Could not save this routine.');
     } finally {
       setSaving(false);
     }
   };
 
   return (
-    <form
-      onSubmit={submit}
-      className="modal-form"
-    >
+    <form onSubmit={submit} className="modal-form">
       <label>
-        Name
+        Title
         <input
           value={form.name}
-          onChange={(e) =>
-            update({ name: e.target.value })
-          }
-          placeholder="e.g. Lisinopril 10mg"
+          onChange={(e) => update({ name: e.target.value })}
+          placeholder={`e.g. ${type === 'Medication' ? 'Amaril 2mg' : type === 'Appointment' ? 'Heart checkup' : type === 'Checkup' ? 'Eye examination' : 'Blood pressure reading'}`}
           required
         />
       </label>
 
       <label>
-        Category
-        <input
-          value={form.category}
-          onChange={(e) =>
-            update({ category: e.target.value })
-          }
-          placeholder="e.g. Blood pressure"
+        Description
+        <textarea
+          value={form.description}
+          onChange={(e) => update({ description: e.target.value })}
+          placeholder="Describe this health routine"
+          rows={4}
+          required
         />
       </label>
 
       <label>
         Frequency
-        <input
+        <select
           value={form.frequency}
           onChange={(e) =>
-            update({ frequency: e.target.value })
+            update({
+              frequency: e.target.value,
+              days: e.target.value === 'Weekly' ? form.days : [],
+            })
           }
-          placeholder="e.g. 2x daily or as directed"
+        >
+          <option value="Daily">Daily</option>
+          <option value="Weekly">Weekly</option>
+          <option value="Monthly">Monthly</option>
+          <option value="Forthnightly">Forthnightly</option>
+          <option value="Every hour">Every hour</option>
+          <option value="Every two hours">Every two hours</option>
+          <option value="Every six hours">Every six hours</option>
+          <option value="Every eight hours">Every eight hours</option>
+        </select>
+      </label>
+
+      {form.frequency === 'Weekly' && (
+        <div className="day-picker">
+          {WEEKDAYS.map((d) => (
+            <button
+              type="button"
+              key={d}
+              className={`day-chip ${form.days.includes(d) ? 'active' : ''}`}
+              onClick={() => toggleDay(d)}
+            >
+              {d}
+            </button>
+          ))}
+        </div>
+      )}
+
+      <label>
+        Time
+        <input
+          type="time"
+          value={form.time}
+          onChange={(e) => update({ time: e.target.value })}
+          required
         />
       </label>
 
       <div className="field-row">
         <label>
-          Start day
+          Start Date
           <input
             type="date"
-            value={form.startDate || ''}
-            onChange={(e) =>
-              update({
-                startDate: e.target.value,
-              })
-            }
+            value={form.startDate}
+            onChange={(e) => update({ startDate: e.target.value })}
             required
           />
         </label>
 
         <label>
-          End day
+          End Date
           <input
             type="date"
-            value={form.endDate || ''}
-            min={
-              form.startDate || undefined
-            }
-            onChange={(e) =>
-              update({
-                endDate: e.target.value,
-              })
-            }
+            min={form.startDate || undefined}
+            value={form.endDate}
+            onChange={(e) => update({ endDate: e.target.value })}
+            required
           />
         </label>
       </div>
+
+      <div className="switch-row">
+        <span>Enable Reminder</span>
+        <Toggle
+          checked={form.reminder}
+          onChange={(v) => update({ reminder: v })}
+        />
+      </div>
+
+      {error && <div className="form-error">{error}</div>}
 
       <div className="modal-actions">
         {onDelete && (
@@ -1761,7 +1537,6 @@ function MedicationForm({ value, onSave, onCancel, onDelete }) {
             type="button"
             className="btn btn-danger"
             onClick={onDelete}
-            disabled={saving}
           >
             <Trash2 size={15} />
           </button>
@@ -1771,7 +1546,6 @@ function MedicationForm({ value, onSave, onCancel, onDelete }) {
           type="button"
           className="btn btn-ghost"
           onClick={onCancel}
-          disabled={saving}
         >
           Cancel
         </button>
@@ -1788,57 +1562,176 @@ function MedicationForm({ value, onSave, onCancel, onDelete }) {
   );
 }
 
+function CategoryRoutinePage({
+  type,
+  title,
+  badge,
+  descriptionLabel = 'Description',
+}) {
+  const {
+    routines,
+    addMedication,
+    updateMedication,
+    removeMedication,
+    addAppointment,
+    updateAppointment,
+    removeAppointment,
+    addCheckup,
+    updateCheckup,
+    removeCheckup,
+    addVital,
+    updateVital,
+    removeVital,
+    logs,
+    loading,
+  } = useData();
 
-// ---------------------------------------------------------------------------
-// Appointments
-// ---------------------------------------------------------------------------
-
-function AppointmentsPage() {
-  const { appointments, addAppointment, updateAppointment, removeAppointment, loading } = useData();
   const [modal, setModal] = useState(null);
-  const now = new Date();
+  const today = todayStr();
 
-  const upcomingThisMonth = appointments.filter((a) => {
-    const d = new Date(`${a.date}T00:00:00`);
-    return d.getMonth() === now.getMonth() && d.getFullYear() === now.getFullYear() && d >= new Date(now.toDateString());
+  const items = useMemo(
+    () => routines.filter((routine) => routine.type === type),
+    [routines, type],
+  );
+
+  const actionMap = {
+    Medication: {
+      add: addMedication,
+      update: updateMedication,
+      remove: removeMedication,
+    },
+    Appointment: {
+      add: addAppointment,
+      update: updateAppointment,
+      remove: removeAppointment,
+    },
+    Checkup: {
+      add: addCheckup,
+      update: updateCheckup,
+      remove: removeCheckup,
+    },
+    Vitals: {
+      add: addVital,
+      update: updateVital,
+      remove: removeVital,
+    },
+  };
+
+  const actions = actionMap[type];
+
+  const takenToday = items.filter(
+    (routine) =>
+      logs.some(
+        (log) =>
+          log.routineId === routine.id &&
+          log.date === today &&
+          log.status === 'completed',
+      ),
+  ).length;
+
+  const endingSoon = items.filter((routine) => {
+    if (!routine.endDate) return false;
+    const end = new Date(`${routine.endDate}T00:00:00`);
+    const current = new Date(`${today}T00:00:00`);
+    const days = Math.ceil((end - current) / 86400000);
+    return days >= 0 && days <= 7;
   }).length;
 
-  const sorted = [...appointments].sort((a, b) => a.date.localeCompare(b.date));
-
-  if (loading) return <div className="full-loader">Loading appointments…</div>;
+  if (loading) {
+    return <div className="full-loader">Loading {title.toLowerCase()}…</div>;
+  }
 
   return (
     <div className="page">
-      <h1 className="page-title">Appointments</h1>
-      <div className="banner-card">{upcomingThisMonth} upcoming this month</div>
+      <h1 className="page-title">{title}</h1>
 
-      {sorted.length === 0 ? (
-        <EmptyState title="No appointments yet" />
+      {type === 'Medication' && (
+        <div className="stat-grid-3">
+          <StatCard label="Active" value={items.length} />
+          <StatCard label="Taken Today" value={`${takenToday}/${items.length}`} />
+          <StatCard label="Ending Soon" value={endingSoon} tone={endingSoon ? 'orange' : undefined} />
+        </div>
+      )}
+
+      {type === 'Appointment' && (
+        <div className="banner-card">
+          {items.filter((item) => item.startDate >= today).length} upcoming
+        </div>
+      )}
+
+      <h2 className="section-title">{title} List</h2>
+
+      {items.length === 0 ? (
+        <EmptyState title={`No ${title.toLowerCase()} yet`} />
       ) : (
         <div className="row-list">
-          {sorted.map((a, i) => (
-            <button type="button" key={a.id} className={`item-row as-button border-${i % 2 === 0 ? 'violet' : 'green'}`} onClick={() => setModal({ ...a })}>
+          {items.map((routine) => (
+            <button
+              type="button"
+              key={routine.id}
+              className="item-row as-button"
+              onClick={() => setModal({ ...routine })}
+            >
+              <Badge text={badge} tint={type === 'Appointment' ? 'pink' : type === 'Checkup' ? 'orange' : type === 'Vitals' ? 'red' : 'violet'} />
               <div className="item-row-body">
-                <strong>{a.doctorName}{a.specialty ? ` \u2022 ${a.specialty}` : ''}</strong>
-                <span>{formatDatePretty(a.date)}, {a.time}</span>
-                <span>{a.location}</span>
+                <strong>{routine.name}</strong>
+                <span>
+                  {routine.frequency}
+                  {routine.time ? ` · ${formatTime12(routine.time)}` : ''}
+                </span>
+                <span>
+                  Start: {formatShortDate(routine.startDate)}
+                  {' · '}
+                  End: {formatShortDate(routine.endDate)}
+                </span>
+                {routine.description && (
+                  <span>{routine.description}</span>
+                )}
               </div>
             </button>
           ))}
         </div>
       )}
 
-      <Fab onClick={() => setModal({ doctorName: '', specialty: '', date: todayStr(), time: '10:00 AM', location: '' })} />
+      <Fab
+        onClick={() =>
+          setModal({
+            name: '',
+            description: '',
+            frequency: 'Daily',
+            days: [],
+            time: '08:00',
+            startDate: todayStr(),
+            endDate: todayStr(),
+            active: true,
+            reminder: true,
+          })
+        }
+      />
 
       {modal && (
-        <ModalSheet title={modal.id ? 'Edit Appointment' : 'New Appointment'} onClose={() => setModal(null)}>
-          <AppointmentForm
+        <ModalSheet
+          title={modal.id ? `Edit ${title.slice(0, -1)}` : `New ${title.slice(0, -1)}`}
+          onClose={() => setModal(null)}
+        >
+          <CategoryRoutineForm
             value={modal}
+            type={type}
             onCancel={() => setModal(null)}
-            onDelete={modal.id ? async () => { await removeAppointment(modal.id); setModal(null); } : null}
+            onDelete={
+              modal.id
+                ? async () => {
+                    await actions.remove(modal.id);
+                    setModal(null);
+                  }
+                : null
+            }
             onSave={async (data) => {
-              if (modal.id) await updateAppointment(modal.id, data);
-              else await addAppointment(data);
+              if (modal.id) {
+                await actions.update(modal.id, data);
+              } else {
+                await actions.add(data);
+              }
               setModal(null);
             }}
           />
@@ -1848,179 +1741,43 @@ function AppointmentsPage() {
   );
 }
 
-function AppointmentForm({ value, onSave, onCancel, onDelete }) {
-  const [form, setForm] = useState(value);
-  const [saving, setSaving] = useState(false);
-  const update = (patch) => setForm((f) => ({ ...f, ...patch }));
-  const submit = async (e) => {
-    e.preventDefault();
-    setSaving(true);
-    try { await onSave(form); } finally { setSaving(false); }
-  };
+function MedicationsPage() {
   return (
-    <form onSubmit={submit} className="modal-form">
-      <label>Doctor / Title<input value={form.doctorName} onChange={(e) => update({ doctorName: e.target.value })} placeholder="e.g. Dr. Adeyemi" required /></label>
-      <label>Specialty (optional)<input value={form.specialty} onChange={(e) => update({ specialty: e.target.value })} placeholder="e.g. Cardiology" /></label>
-      <div className="field-row">
-        <label>Date<input type="date" value={form.date} onChange={(e) => update({ date: e.target.value })} required /></label>
-        <label>Time<input value={form.time} onChange={(e) => update({ time: e.target.value })} placeholder="10:00 AM" required /></label>
-      </div>
-      <label>Location<input value={form.location} onChange={(e) => update({ location: e.target.value })} placeholder="e.g. City Clinic, Lagos" /></label>
-      <div className="modal-actions">
-        {onDelete && <button type="button" className="btn btn-danger" onClick={onDelete}><Trash2 size={15} /></button>}
-        <button type="button" className="btn btn-ghost" onClick={onCancel}>Cancel</button>
-        <button type="submit" className="btn btn-primary" disabled={saving}>{saving ? 'Saving…' : 'Save'}</button>
-      </div>
-    </form>
+    <CategoryRoutinePage
+      type="Medication"
+      title="Medications"
+      badge="Rx"
+    />
   );
 }
 
-// ---------------------------------------------------------------------------
-// Checkups
-// ---------------------------------------------------------------------------
+function AppointmentsPage() {
+  return (
+    <CategoryRoutinePage
+      type="Appointment"
+      title="Appointments"
+      badge="Ap"
+    />
+  );
+}
 
 function CheckupsPage() {
-  const { checkups, addCheckup, updateCheckup, removeCheckup, loading } = useData();
-  const [modal, setModal] = useState(null);
-
-  if (loading) return <div className="full-loader">Loading checkups…</div>;
-
   return (
-    <div className="page">
-      <h1 className="page-title">Checkups</h1>
-      {checkups.length === 0 ? (
-        <EmptyState title="No checkups yet" />
-      ) : (
-        <div className="row-list">
-          {checkups.map((c) => {
-            const status = checkupStatus(c.nextDue);
-            return (
-              <button type="button" key={c.id} className="item-row as-button" onClick={() => setModal({ ...c })}>
-                <Badge text="Ck" tint="orange" shape="square" />
-                <div className="item-row-body">
-                  <strong>{c.name}</strong>
-                  <span>Next due: {monthYearLabel(c.nextDue)}</span>
-                </div>
-                <span className={`pill pill-${status.tone}`}>{status.label}</span>
-              </button>
-            );
-          })}
-        </div>
-      )}
-
-      <Fab onClick={() => setModal({ name: '', nextDue: todayStr().slice(0, 7) })} />
-
-      {modal && (
-        <ModalSheet title={modal.id ? 'Edit Checkup' : 'New Checkup'} onClose={() => setModal(null)}>
-          <form
-            className="modal-form"
-            onSubmit={async (e) => {
-              e.preventDefault();
-              if (modal.id) await updateCheckup(modal.id, modal);
-              else await addCheckup(modal);
-              setModal(null);
-            }}
-          >
-            <label>Name<input value={modal.name} onChange={(e) => setModal({ ...modal, name: e.target.value })} placeholder="e.g. Eye Exam" required /></label>
-            <label>Next due<input type="month" value={modal.nextDue} onChange={(e) => setModal({ ...modal, nextDue: e.target.value })} required /></label>
-            <div className="modal-actions">
-              {modal.id && <button type="button" className="btn btn-danger" onClick={async () => { await removeCheckup(modal.id); setModal(null); }}><Trash2 size={15} /></button>}
-              <button type="button" className="btn btn-ghost" onClick={() => setModal(null)}>Cancel</button>
-              <button type="submit" className="btn btn-primary">Save</button>
-            </div>
-          </form>
-        </ModalSheet>
-      )}
-    </div>
+    <CategoryRoutinePage
+      type="Checkup"
+      title="Checkups"
+      badge="Ck"
+    />
   );
 }
 
-// ---------------------------------------------------------------------------
-// Vitals
-// ---------------------------------------------------------------------------
-
 function VitalsPage() {
-  const { vitals, addVital, removeVital, loading } = useData();
-  const [modal, setModal] = useState(null);
-  const types = ['BP', 'HR', 'Weight', 'Temperature'];
-
-  const latestFor = (type) => [...vitals].filter((v) => v.type === type).sort((a, b) => b.date.localeCompare(a.date))[0];
-  const recent = [...vitals].sort((a, b) => b.date.localeCompare(a.date)).slice(0, 10);
-
-  if (loading) return <div className="full-loader">Loading vitals…</div>;
-
   return (
-    <div className="page">
-      <h1 className="page-title">Vitals</h1>
-      <div className="vitals-grid">
-        {types.map((t) => {
-          const latest = latestFor(t);
-          return (
-            <div className="vital-card" key={t}>
-              <Badge text={t === 'Weight' ? 'Wt' : t === 'Temperature' ? 'Tp' : t} tint={vitalColor(t)} />
-              <span className="vital-label">{vitalLabel(t)}</span>
-              <strong className="vital-value">{latest ? `${latest.value} ${vitalUnit(t)}` : '—'}</strong>
-            </div>
-          );
-        })}
-      </div>
-
-      <h2 className="section-title">Recent Readings</h2>
-      {recent.length === 0 ? (
-        <EmptyState title="No readings yet" />
-      ) : (
-        <div className="row-list">
-          {recent.map((v) => (
-            <button type="button" key={v.id} className="item-row as-button" onClick={() => setModal({ id: v.id })}>
-              <Badge text={v.type === 'Weight' ? 'Wt' : v.type === 'Temperature' ? 'Tp' : v.type} tint={vitalColor(v.type)} />
-              <div className="item-row-body">
-                <strong>{vitalLabel(v.type)}</strong>
-                <span>{formatDatePretty(v.date)}</span>
-              </div>
-              <strong>{v.value} {v.unit}</strong>
-            </button>
-          ))}
-        </div>
-      )}
-
-      <Fab onClick={() => setModal({ type: 'BP', value: '', date: todayStr() })} />
-
-      {modal && (
-        <ModalSheet title="Reading" onClose={() => setModal(null)}>
-          {modal.id ? (
-            <div className="modal-form">
-              <p>Delete this reading?</p>
-              <div className="modal-actions">
-                <button type="button" className="btn btn-ghost" onClick={() => setModal(null)}>Cancel</button>
-                <button type="button" className="btn btn-danger" onClick={async () => { await removeVital(modal.id); setModal(null); }}>Delete</button>
-              </div>
-            </div>
-          ) : (
-            <form
-              className="modal-form"
-              onSubmit={async (e) => {
-                e.preventDefault();
-                await addVital({ ...modal, unit: vitalUnit(modal.type) });
-                setModal(null);
-              }}
-            >
-              <label>
-                Type
-                <select value={modal.type} onChange={(e) => setModal({ ...modal, type: e.target.value })}>
-                  {types.map((t) => <option key={t} value={t}>{vitalLabel(t)}</option>)}
-                </select>
-              </label>
-              <label>Value<input value={modal.value} onChange={(e) => setModal({ ...modal, value: e.target.value })} placeholder="e.g. 120/80" required /></label>
-              <label>Date<input type="date" value={modal.date} onChange={(e) => setModal({ ...modal, date: e.target.value })} required /></label>
-              <div className="modal-actions">
-                <button type="button" className="btn btn-ghost" onClick={() => setModal(null)}>Cancel</button>
-                <button type="submit" className="btn btn-primary">Save</button>
-              </div>
-            </form>
-          )}
-        </ModalSheet>
-      )}
-    </div>
+    <CategoryRoutinePage
+      type="Vitals"
+      title="Vitals"
+      badge="Vi"
+    />
   );
 }
 
@@ -2187,13 +1944,52 @@ function SettingsPage() {
 function EditProfileForm({ user, onSave, onCancel, saving = false }) {
   const [name, setName] = useState(user?.name || '');
   const [email, setEmail] = useState(user?.email || '');
+
   return (
-    <form className="modal-form" onSubmit={(e) => { e.preventDefault(); onSave({ name: name.trim(), email: email.trim() }); }}>
-      <label>Name<input value={name} onChange={(e) => setName(e.target.value)} required /></label>
-      <label>Email<input type="email" value={email} onChange={(e) => setEmail(e.target.value)} required /></label>
+    <form
+      className="modal-form"
+      onSubmit={(e) => {
+        e.preventDefault();
+        onSave({
+          name: name.trim(),
+          email: email.trim(),
+        });
+      }}
+    >
+      <label>
+        Name
+        <input
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          required
+        />
+      </label>
+
+      <label>
+        Email
+        <input
+          type="email"
+          value={email}
+          onChange={(e) => setEmail(e.target.value)}
+          required
+        />
+      </label>
+
       <div className="modal-actions">
-        <button type="button" className="btn btn-ghost" onClick={onCancel} disabled={saving}>Cancel</button>
-        <button type="submit" className="btn btn-primary" disabled={saving || !name.trim() || !email.trim()}>
+        <button
+          type="button"
+          className="btn btn-ghost"
+          onClick={onCancel}
+          disabled={saving}
+        >
+          Cancel
+        </button>
+
+        <button
+          type="submit"
+          className="btn btn-primary"
+          disabled={saving || !name.trim() || !email.trim()}
+        >
           {saving ? 'Saving…' : 'Save'}
         </button>
       </div>

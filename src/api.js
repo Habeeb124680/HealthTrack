@@ -1,5 +1,5 @@
 // ---------------------------------------------------------------------------
-// api.js
+// api.js - HealthTrack frontend API layer
 // ---------------------------------------------------------------------------
 
 export const API_BASE_URL =
@@ -7,72 +7,48 @@ export const API_BASE_URL =
 
 const TOKEN_KEY = 'healthtrack.token';
 const USER_KEY = 'healthtrack.user';
-
+const PROFILE_PREFIX = 'healthtrack.profile.';
 const USE_MOCK = false;
 
-// ---------------------------------------------------------------------------
-// HTTP request helper
-// ---------------------------------------------------------------------------
-
 async function request(path, { method = 'GET', body, token } = {}) {
-  const authToken =
-    token || localStorage.getItem(TOKEN_KEY);
-
-  const headers = {
-    'Content-Type': 'application/json',
-  };
+  const authToken = token || localStorage.getItem(TOKEN_KEY);
+  const headers = { 'Content-Type': 'application/json' };
 
   if (authToken) {
     headers.Authorization = `Bearer ${authToken}`;
   }
 
-  const res = await fetch(`${API_BASE_URL}${path}`, {
+  const response = await fetch(`${API_BASE_URL}${path}`, {
     method,
     headers,
-    body: body ? JSON.stringify(body) : undefined,
+    body: body === undefined ? undefined : JSON.stringify(body),
   });
 
-  const contentType = res.headers.get('content-type') || '';
-
+  const contentType = response.headers.get('content-type') || '';
   let data = null;
 
   if (contentType.includes('application/json')) {
-    data = await res.json().catch(() => null);
+    data = await response.json().catch(() => null);
   } else {
-    data = await res.text().catch(() => null);
+    data = await response.text().catch(() => null);
   }
 
-  if (!res.ok) {
+  if (!response.ok) {
     const message =
       typeof data === 'object' && data
-        ? data.message ||
-          data.error ||
-          JSON.stringify(data)
+        ? data.message || data.error || JSON.stringify(data)
         : data;
 
-    throw new Error(
-      message || `Request failed: ${res.status}`
-    );
+    throw new Error(message || `Request failed: ${response.status}`);
   }
 
   return data;
 }
 
-// ---------------------------------------------------------------------------
-// Small helpers
-// ---------------------------------------------------------------------------
+const delay = (value, ms = 150) =>
+  new Promise((resolve) => setTimeout(() => resolve(value), ms));
 
-const delay = (value, ms = 200) =>
-  new Promise((resolve) =>
-    setTimeout(() => resolve(value), ms)
-  );
-
-const uid = () =>
-  Math.random().toString(36).slice(2, 10);
-
-// ---------------------------------------------------------------------------
-// Local storage helpers
-// ---------------------------------------------------------------------------
+const uid = () => Math.random().toString(36).slice(2, 10);
 
 function readStore(key, fallback = null) {
   try {
@@ -88,87 +64,55 @@ function writeStore(key, value) {
   return value;
 }
 
-const KEYS = {
-  user: USER_KEY,
-  routines: 'healthtrack.routines',
-  logs: 'healthtrack.logs',
-  medications: 'healthtrack.medications',
-  appointments: 'healthtrack.appointments',
-  checkups: 'healthtrack.checkups',
-  vitals: 'healthtrack.vitals',
-};
-
-function currentUserScope() {
-  const user = readStore(USER_KEY, null);
-  return user?.id || user?._id || user?.email || 'guest';
+function getUserId(user) {
+  return String(user?.id || user?._id || user?.email || '');
 }
 
-function userStoreKey(key) {
-  return `${key}.${encodeURIComponent(String(currentUserScope()))}`;
+function profileStorageKey(user) {
+  const id = getUserId(user);
+  return id ? `${PROFILE_PREFIX}${encodeURIComponent(id)}` : null;
 }
 
-function readUserStore(key, fallback = []) {
-  const scoped = readStore(userStoreKey(key), null);
+function mergeProfileOverride(user) {
+  if (!user) return null;
 
-  if (scoped !== null) {
-    return scoped;
-  }
+  const key = profileStorageKey(user);
+  const override = key ? readStore(key, null) : null;
 
-  return readStore(key, fallback);
+  const merged = override
+    ? {
+        ...user,
+        ...(override.name !== undefined ? { name: override.name } : {}),
+        ...(override.email !== undefined ? { email: override.email } : {}),
+      }
+    : user;
+
+  writeStore(USER_KEY, merged);
+  return merged;
 }
-
-function writeUserStore(key, value) {
-  return writeStore(userStoreKey(key), value);
-}
-
-// ---------------------------------------------------------------------------
-// Date/time helpers
-// ---------------------------------------------------------------------------
 
 function toBackendDate(date, time = '00:00') {
-  if (!date) {
-    return new Date().toISOString();
-  }
-
-  const safeTime =
-    typeof time === 'string' && time.length >= 5
-      ? time.slice(0, 5)
-      : '00:00';
-
-  const value = `${date}T${safeTime}:00`;
-
-  const parsed = new Date(value);
-
-  if (Number.isNaN(parsed.getTime())) {
-    return new Date().toISOString();
-  }
-
-  return parsed.toISOString();
+  if (!date) return '';
+  const safeTime = time || '00:00';
+  return `${date}T${safeTime}:00.000Z`;
 }
 
 function fromBackendDate(value) {
-  if (!value) {
-    return '';
-  }
+  if (!value) return '';
 
   const date = new Date(value);
 
   if (Number.isNaN(date.getTime())) {
-    return String(value).slice(0, 10);
+    return String(value);
   }
 
   return date.toISOString().slice(0, 10);
 }
 
 function fromBackendTime(value) {
-  if (!value) {
-    return '08:00';
-  }
+  if (!value) return '';
 
-  if (
-    typeof value === 'string' &&
-    value.includes('T')
-  ) {
+  if (typeof value === 'string' && value.includes('T')) {
     const date = new Date(value);
 
     if (!Number.isNaN(date.getTime())) {
@@ -179,10 +123,6 @@ function fromBackendTime(value) {
   return String(value).slice(0, 5);
 }
 
-// ---------------------------------------------------------------------------
-// Routine mappings
-// ---------------------------------------------------------------------------
-
 const routineTypeToBackend = {
   Medication: 'medication',
   Exercise: 'exercise',
@@ -190,6 +130,8 @@ const routineTypeToBackend = {
   Sleep: 'sleep',
   Nutrition: 'nutrition',
   Appointment: 'appointment',
+  Checkup: 'health_check',
+  Vitals: 'other',
   Other: 'other',
 };
 
@@ -199,8 +141,11 @@ const routineTypeFromBackend = {
   hydration: 'Hydration',
   sleep: 'Sleep',
   nutrition: 'Nutrition',
-  health_check: 'Other',
   appointment: 'Appointment',
+  health_check: 'Checkup',
+  checkup: 'Checkup',
+  vitals: 'Vitals',
+  vital: 'Vitals',
   other: 'Other',
 };
 
@@ -226,100 +171,57 @@ const routineFrequencyFromBackend = {
   'every eight hours': 'Every eight hours',
 };
 
-// ---------------------------------------------------------------------------
-// Normalize backend routine -> frontend routine
-// ---------------------------------------------------------------------------
-
 function normalizeRoutine(routine) {
-  if (!routine) {
-    return null;
-  }
+  if (!routine) return null;
+
+  const owner =
+    typeof routine.user === 'object' && routine.user
+      ? routine.user._id || routine.user.id || routine.user.email || ''
+      : routine.user || routine.userId || '';
+
+  const rawDescription = routine.description || '';
+
+  const isVitalsRoutine =
+    routine.type === 'other' &&
+    rawDescription.trim().toLowerCase().startsWith('[vitals]');
 
   return {
-    id:
-      routine._id ||
-      routine.id,
-
-    ownerId:
-      typeof routine.user === 'object' &&
-      routine.user
-        ? (
-            routine.user._id ||
-            routine.user.id ||
-            routine.user.email ||
-            ''
-          )
-        : (
-            routine.user ||
-            routine.userId ||
-            ''
-          ),
-
-    name:
-      routine.title ||
-      routine.name ||
-      '',
-
-    type:
-      routineTypeFromBackend[routine.type] ||
-      routine.type ||
-      'Other',
-
-    description:
-      routine.description ||
-      '',
-
+    id: routine._id || routine.id,
+    ownerId: String(owner || ''),
+    name: routine.title || routine.name || '',
+    type: isVitalsRoutine
+      ? 'Vitals'
+      : routineTypeFromBackend[routine.type] ||
+        routine.type ||
+        'Other',
+    description: isVitalsRoutine
+      ? rawDescription.replace(/^\[vitals\]\s*/i, '')
+      : rawDescription,
     frequency:
-      routineFrequencyFromBackend[
-        routine.frequency
-      ] ||
+      routineFrequencyFromBackend[routine.frequency] ||
       routine.frequency ||
       'Daily',
-
-    days:
-      routine.days ||
-      [],
-
-    time:
-      fromBackendTime(routine.time),
-
-    startDate:
-      fromBackendDate(
-        routine.startDate
-      ),
-
-    endDate:
-      fromBackendDate(
-        routine.endDate
-      ),
-
+    days: routine.days || [],
+    time: fromBackendTime(routine.time),
+    startDate: fromBackendDate(routine.startDate),
+    endDate: fromBackendDate(routine.endDate),
     active:
       routine.routineStatus !== undefined
         ? routine.routineStatus
         : routine.active ?? true,
-
-    reminder:
-      routine.reminder ?? true,
+    reminder: routine.reminder ?? true,
   };
 }
 
-// ---------------------------------------------------------------------------
-// Prepare frontend routine -> backend routine
-// ---------------------------------------------------------------------------
-
 function prepareRoutineForBackend(item) {
   const startDate =
-    item.startDate ||
-    new Date().toISOString().slice(0, 10);
+    item.startDate || new Date().toISOString().slice(0, 10);
 
-  const time =
-    item.time ||
-    '08:00';
+  const endDate = item.endDate || startDate;
+  const time = item.time || '08:00';
 
   return {
-    title:
-      item.name?.trim() ||
-      'Health routine',
+    title: item.name?.trim() || 'Health routine',
 
     type:
       routineTypeToBackend[item.type] ||
@@ -327,52 +229,81 @@ function prepareRoutineForBackend(item) {
       'other',
 
     description:
-      item.description?.trim() ||
-      `${item.name || 'Health'} routine`,
+      item.type === 'Vitals'
+        ? `[Vitals] ${item.description?.trim() || ''}`.trim()
+        : item.description?.trim() || '',
 
     frequency:
-      routineFrequencyToBackend[
-        item.frequency
-      ] ||
+      routineFrequencyToBackend[item.frequency] ||
       item.frequency?.toLowerCase() ||
       'daily',
 
-    time:
-      toBackendDate(
-        startDate,
-        time
-      ),
+    time: toBackendDate(startDate, time),
 
-    startDate:
-      toBackendDate(
-        startDate,
-        '00:00'
-      ),
+    startDate: toBackendDate(startDate, '00:00'),
 
-    endDate:
-      toBackendDate(
-        item.endDate ||
-          startDate,
-        '23:59'
-      ),
+    endDate: toBackendDate(endDate, '23:59'),
 
     routineStatus:
-      item.active !== undefined
-        ? item.active
-        : true,
+      item.active !== undefined ? item.active : true,
   };
 }
+// ---------------------------------------------------------------------------
+// Authentication
+// ---------------------------------------------------------------------------
 
-// ---------------------------------------------------------------------------
-// Auth
-// ---------------------------------------------------------------------------
+async function ensureDefaultRoutines() {
+  try {
+    const existing = await routinesApi.list();
+
+    const names = new Set(
+      existing.map((routine) =>
+        routine.name.trim().toLowerCase(),
+      ),
+    );
+
+    const startDate = new Date().toISOString().slice(0, 10);
+
+    const defaults = [
+      {
+        name: 'Morning Run',
+        type: 'Exercise',
+        description:
+          'A short morning run to support daily physical activity.',
+        frequency: 'Daily',
+        time: '07:00',
+        startDate,
+        endDate: '2099-12-31',
+        active: true,
+      },
+      {
+        name: 'Drink Water',
+        type: 'Hydration',
+        description:
+          'Drink water in the morning to support healthy hydration.',
+        frequency: 'Daily',
+        time: '08:00',
+        startDate,
+        endDate: '2099-12-31',
+        active: true,
+      },
+    ];
+
+    for (const routine of defaults) {
+      if (!names.has(routine.name.toLowerCase())) {
+        await routinesApi.create(routine);
+      }
+    }
+  } catch (error) {
+    console.warn(
+      'Default routine setup skipped:',
+      error,
+    );
+  }
+}
 
 export const authApi = {
-    async register({
-    name,
-    email,
-    password,
-  }) {
+  async register({ name, email, password }) {
     if (USE_MOCK) {
       const user = {
         id: uid(),
@@ -380,10 +311,8 @@ export const authApi = {
         email,
       };
 
-      writeStore(
-        KEYS.user,
-        user
-      );
+      writeStore(USER_KEY, user);
+      localStorage.setItem(TOKEN_KEY, 'mock-token');
 
       return delay({
         user,
@@ -391,81 +320,58 @@ export const authApi = {
       });
     }
 
-    // Register the user first.
-    await request(
-      '/users/register',
-      {
-        method: 'POST',
-        body: {
-          name,
-          email,
-          password,
-        },
-      }
-    );
+    await request('/users/register', {
+      method: 'POST',
+      body: {
+        name,
+        email,
+        password,
+      },
+    });
 
-    // The backend registration endpoint does not
-    // return a token, so log in immediately after
-    // registration to obtain one.
-    const loginResult =
-      await request(
-        '/users/login',
-        {
-          method: 'POST',
-          body: {
-            email,
-            password,
-          },
-        }
-      );
+    const loginResult = await request('/users/login', {
+      method: 'POST',
+      body: {
+        email,
+        password,
+      },
+    });
 
     if (loginResult?.token) {
       localStorage.setItem(
         TOKEN_KEY,
-        loginResult.token
+        loginResult.token,
       );
     }
 
     if (loginResult?.user) {
-      writeStore(
-        USER_KEY,
-        loginResult.user
-      );
+      mergeProfileOverride(loginResult.user);
     }
 
-    return loginResult;
+    await ensureDefaultRoutines();
+
+    return {
+      ...loginResult,
+      user: readStore(
+        USER_KEY,
+        loginResult?.user || null,
+      ),
+    };
   },
 
-  async login({
-    email,
-    password,
-  }) {
+  async login({ email, password }) {
     if (USE_MOCK) {
-      const existing =
-        readStore(
-          KEYS.user,
-          null
-        );
+      const user = {
+        id: uid(),
+        name: email.split('@')[0],
+        email,
+      };
 
-      const user =
-        existing &&
-        existing.email === email
-          ? existing
-          : {
-              id: uid(),
-              name:
-                email.split('@')[0],
-              email,
-            };
-
-      writeStore(
-        KEYS.user,
-        user
-      );
+      writeStore(USER_KEY, user);
 
       localStorage.setItem(
         TOKEN_KEY,
-        'mock-token'
+        'mock-token',
       );
 
       return delay({
@@ -474,45 +380,40 @@ export const authApi = {
       });
     }
 
-    const result =
-      await request(
-        '/users/login',
-        {
-          method: 'POST',
-          body: {
-            email,
-            password,
-          },
-        }
-      );
+    const result = await request('/users/login', {
+      method: 'POST',
+      body: {
+        email,
+        password,
+      },
+    });
 
     if (result?.token) {
       localStorage.setItem(
         TOKEN_KEY,
-        result.token
+        result.token,
       );
     }
 
-    if (result?.user) {
-      writeStore(
-        USER_KEY,
-        result.user
-      );
-    }
+    const user = result?.user
+      ? mergeProfileOverride(result.user)
+      : null;
 
-    return result;
+    return {
+      ...result,
+      user: user || result?.user,
+    };
   },
 
   async updateProfile(patch = {}) {
-    const current =
-      readStore(
-        USER_KEY,
-        null
-      );
+    const current = readStore(
+      USER_KEY,
+      null,
+    );
 
     if (!current) {
       throw new Error(
-        'No signed-in user found.'
+        'No signed-in user found.',
       );
     }
 
@@ -522,7 +423,7 @@ export const authApi = {
       ...(patch.name !== undefined
         ? {
             name: String(
-              patch.name
+              patch.name,
             ).trim(),
           }
         : {}),
@@ -530,39 +431,49 @@ export const authApi = {
       ...(patch.email !== undefined
         ? {
             email: String(
-              patch.email
+              patch.email,
             ).trim(),
           }
         : {}),
     };
 
+    const key = profileStorageKey(current);
+
+    if (key) {
+      writeStore(key, {
+        ...(readStore(key, {}) || {}),
+
+        ...(patch.name !== undefined
+          ? {
+              name: next.name,
+            }
+          : {}),
+
+        ...(patch.email !== undefined
+          ? {
+              email: next.email,
+            }
+          : {}),
+      });
+    }
+
     writeStore(
       USER_KEY,
-      next
+      next,
     );
 
     return next;
   },
 
   async me() {
-    if (USE_MOCK) {
-      return delay(
-        readStore(
-          USER_KEY,
-          null
-        )
-      );
-    }
-
-    // The current backend does not expose
-    // a /users/me endpoint.
-    //
-    // The signed-in user is therefore recovered
-    // from localStorage.
-    return readStore(
+    const current = readStore(
       USER_KEY,
-      null
+      null,
     );
+
+    return current
+      ? mergeProfileOverride(current)
+      : null;
   },
 
   async requestPasswordReset(email) {
@@ -574,13 +485,11 @@ export const authApi = {
     }
 
     throw new Error(
-      'Password reset is not connected to the current backend yet.'
+      'Password reset is not connected to the current backend yet.',
     );
   },
 
-  async resetPassword({
-    password,
-  }) {
+  async resetPassword() {
     if (USE_MOCK) {
       return delay({
         ok: true,
@@ -588,18 +497,13 @@ export const authApi = {
     }
 
     throw new Error(
-      'Password reset is not connected to the current backend yet.'
+      'Password reset is not connected to the current backend yet.',
     );
   },
 
   logout() {
-    localStorage.removeItem(
-      TOKEN_KEY
-    );
-
-    localStorage.removeItem(
-      USER_KEY
-    );
+    localStorage.removeItem(TOKEN_KEY);
+    localStorage.removeItem(USER_KEY);
   },
 };
 
@@ -607,9 +511,7 @@ export const authApi = {
 // Routines
 // ---------------------------------------------------------------------------
 
-function getRoutineFromResponse(
-  result
-) {
+function getRoutineFromResponse(result) {
   return (
     result?.data ||
     result?.routine ||
@@ -623,61 +525,61 @@ export const routinesApi = {
     if (USE_MOCK) {
       return delay(
         readStore(
-          KEYS.routines,
-          []
-        )
+          'healthtrack.routines',
+          [],
+        ),
       );
     }
 
-    const result =
-      await request(
-        '/routine/getAllRoutines'
-      );
+    const result = await request(
+      '/routine/getAllRoutines',
+    );
 
-    const currentUser =
-      readStore(
-        USER_KEY,
-        null
-      );
+    const raw = Array.isArray(result)
+      ? result
+      : result?.data ||
+        result?.routines ||
+        [];
 
-    const currentUserId =
-      String(
-        currentUser?.id ||
-        currentUser?._id ||
-        currentUser?.email ||
-        ''
-      );
-
-    const normalized = (
-      result?.data || []
-    )
+    const normalized = raw
       .map(normalizeRoutine)
       .filter(Boolean);
 
-    // If there is no signed-in user,
-    // don't expose any routines.
-    if (!currentUserId) {
-      return [];
+    const currentUser = readStore(
+      USER_KEY,
+      null,
+    );
+
+    const currentUserId =
+      getUserId(currentUser);
+
+    const ownerDataExists =
+      normalized.some(
+        (routine) =>
+          routine.ownerId,
+      );
+
+    if (
+      ownerDataExists &&
+      currentUserId
+    ) {
+      return normalized.filter(
+        (routine) =>
+          String(
+            routine.ownerId,
+          ) === currentUserId,
+      );
     }
 
-    // The current backend may return routines
-    // belonging to multiple users. Only keep
-    // routines belonging to the current user.
-    return normalized.filter(
-      (routine) =>
-        String(
-          routine.ownerId || ''
-        ) === currentUserId
-    );
+    return normalized;
   },
 
   async create(item) {
     if (USE_MOCK) {
-      const items =
-        readStore(
-          KEYS.routines,
-          []
-        );
+      const routines = readStore(
+        'healthtrack.routines',
+        [],
+      );
 
       const created = {
         ...item,
@@ -685,223 +587,142 @@ export const routinesApi = {
       };
 
       writeStore(
-        KEYS.routines,
+        'healthtrack.routines',
         [
           created,
-          ...items,
-        ]
+          ...routines,
+        ],
       );
 
-      return delay(
-        created
-      );
+      return delay(created);
     }
 
-    const result =
-      await request(
-        '/routine/createRoutine',
-        {
-          method: 'POST',
-          body:
-            prepareRoutineForBackend(
-              item
-            ),
-        }
-      );
+    const result = await request(
+      '/routine/createRoutine',
+      {
+        method: 'POST',
+        body:
+          prepareRoutineForBackend(
+            item,
+          ),
+      },
+    );
 
     const created =
       normalizeRoutine(
-        result?.data
-      );
-
-    const currentUser =
-      readStore(
-        USER_KEY,
-        null
-      );
-
-    return {
-      ...created,
-
-      ownerId:
-        created?.ownerId ||
-        String(
-          currentUser?.id ||
-          currentUser?._id ||
-          currentUser?.email ||
-          ''
+        getRoutineFromResponse(
+          result,
         ),
-    };
+      );
+
+    return created;
   },
 
   async getById(id) {
-    if (USE_MOCK) {
-      const routines =
-        readStore(
-          KEYS.routines,
-          []
-        );
+    const result = await request(
+      `/routine/getRoutineById/${id}`,
+    );
 
-      return delay(
-        routines.find(
-          (routine) =>
-            routine.id === id
-        ) || null
-      );
-    }
-
-    const result =
-      await request(
-        `/routine/getRoutineById/${id}`
-      );
-
-    const routine =
-      normalizeRoutine(
-        getRoutineFromResponse(
-          result
-        )
-      );
-
-    const currentUser =
-      readStore(
-        USER_KEY,
-        null
-      );
-
-    if (
-      routine &&
-      routine.ownerId &&
-      String(
-        routine.ownerId
-      ) !==
-        String(
-          currentUser?.id ||
-          currentUser?._id ||
-          currentUser?.email ||
-          ''
-        )
-    ) {
-      throw new Error(
-        'You do not have access to this routine.'
-      );
-    }
-
-    return routine;
+    return normalizeRoutine(
+      getRoutineFromResponse(
+        result,
+      ),
+    );
   },
 
-  async update(
-    id,
-    item
-  ) {
+  async update(id, item) {
     if (USE_MOCK) {
-      const routines =
-        readStore(
-          KEYS.routines,
-          []
-        );
-
-      const next =
-        routines.map(
-          (routine) =>
-            routine.id === id
-              ? {
-                  ...routine,
-                  ...item,
-                }
-              : routine
-        );
-
-      writeStore(
-        KEYS.routines,
-        next
+      const routines = readStore(
+        'healthtrack.routines',
+        [],
       );
 
-      return delay(
-        next.find(
-          (routine) =>
-            routine.id === id
-        )
+      const next = routines.map(
+        (routine) =>
+          routine.id === id
+            ? {
+                ...routine,
+                ...item,
+              }
+            : routine,
+      );
+
+      writeStore(
+        'healthtrack.routines',
+        next,
+      );
+
+      return next.find(
+        (routine) =>
+          routine.id === id,
       );
     }
 
-    const result =
-      await request(
-        `/routine/editRoutine/${id}`,
-        {
-          method: 'PUT',
-          body:
-            prepareRoutineForBackend(
-              item
-            ),
-        }
-      );
+    const result = await request(
+      `/routine/editRoutine/${id}`,
+      {
+        method: 'PUT',
+        body:
+          prepareRoutineForBackend(
+            item,
+          ),
+      },
+    );
 
-    const updated =
-      normalizeRoutine(
-        result?.data
-      );
-
-    const currentUser =
-      readStore(
-        USER_KEY,
-        null
-      );
-
-    return {
-      ...updated,
-
-      ownerId:
-        updated?.ownerId ||
-        String(
-          currentUser?.id ||
-          currentUser?._id ||
-          currentUser?.email ||
-          ''
-        ),
-    };
+    return normalizeRoutine(
+      getRoutineFromResponse(
+        result,
+      ),
+    );
   },
 
   async remove(id) {
     if (USE_MOCK) {
-      const routines =
-        readStore(
-          KEYS.routines,
-          []
-        );
+      const routines = readStore(
+        'healthtrack.routines',
+        [],
+      );
 
       writeStore(
-        KEYS.routines,
+        'healthtrack.routines',
         routines.filter(
           (routine) =>
-            routine.id !== id
-        )
+            routine.id !== id,
+        ),
       );
 
-      return delay(
-        true
-      );
+      return true;
     }
 
     await request(
       `/routine/deleteRoutine/${id}`,
       {
         method: 'DELETE',
-      }
+      },
     );
 
     return true;
   },
 };
-
 // ---------------------------------------------------------------------------
-// Routine Logs
+// Local routine logs
 // ---------------------------------------------------------------------------
 
 export const logsApi = {
   async list() {
-    return readUserStore(
-      KEYS.logs,
-      []
+    const user = readStore(
+      USER_KEY,
+      null,
+    );
+
+    const scope =
+      getUserId(user) || 'guest';
+
+    return readStore(
+      `healthtrack.logs.${encodeURIComponent(
+        scope,
+      )}`,
+      [],
     );
   },
 
@@ -910,11 +731,23 @@ export const logsApi = {
     date,
     status,
   }) {
-    const logs =
-      readUserStore(
-        KEYS.logs,
-        []
-      );
+    const user = readStore(
+      USER_KEY,
+      null,
+    );
+
+    const scope =
+      getUserId(user) || 'guest';
+
+    const key =
+      `healthtrack.logs.${encodeURIComponent(
+        scope,
+      )}`;
+
+    const logs = readStore(
+      key,
+      [],
+    );
 
     const entry = {
       id: uid(),
@@ -925,22 +758,20 @@ export const logsApi = {
         new Date().toISOString(),
     };
 
-    const nextLogs =
-      logs.filter(
-        (log) =>
-          !(
-            log.routineId ===
-              routineId &&
-            log.date === date
-          )
-      );
+    const next = logs.filter(
+      (log) =>
+        !(
+          log.routineId === routineId &&
+          log.date === date
+        ),
+    );
 
-    writeUserStore(
-      KEYS.logs,
+    writeStore(
+      key,
       [
         entry,
-        ...nextLogs,
-      ]
+        ...next,
+      ],
     );
 
     return entry;
@@ -948,400 +779,109 @@ export const logsApi = {
 };
 
 // ---------------------------------------------------------------------------
-// Medications
+// Compatibility exports
 // ---------------------------------------------------------------------------
 
 export const medicationsApi = {
-  async list() {
-    return readUserStore(
-      KEYS.medications,
-      []
-    );
-  },
+  list: async () =>
+    (await routinesApi.list()).filter(
+      (r) => r.type === 'Medication',
+    ),
 
-  async create(item) {
-    const medications =
-      readUserStore(
-        KEYS.medications,
-        []
-      );
+  create: async (item) =>
+    routinesApi.create({
+      ...item,
+      type: 'Medication',
+      name: item.name,
+    }),
 
-    const created = {
-      id: uid(),
+  update: async (id, item) =>
+    routinesApi.update(id, {
+      ...item,
+      type: 'Medication',
+      name: item.name,
+    }),
 
-      name:
-        item.name?.trim() ||
-        'Medication',
-
-      category:
-        item.category?.trim() ||
-        '',
-
-      frequency:
-        item.frequency?.trim() ||
-        'Daily',
-
-      startDate:
-        item.startDate ||
-        new Date()
-          .toISOString()
-          .slice(0, 10),
-
-      endDate:
-        item.endDate ||
-        '',
-    };
-
-    writeUserStore(
-      KEYS.medications,
-      [
-        created,
-        ...medications,
-      ]
-    );
-
-    return created;
-  },
-
-  async update(
-    id,
-    item
-  ) {
-    const medications =
-      readUserStore(
-        KEYS.medications,
-        []
-      );
-
-    const next =
-      medications.map(
-        (medication) =>
-          medication.id === id
-            ? {
-                ...medication,
-                ...item,
-                id,
-              }
-            : medication
-      );
-
-    writeUserStore(
-      KEYS.medications,
-      next
-    );
-
-    return next.find(
-      (medication) =>
-        medication.id === id
-    );
-  },
-
-  async remove(id) {
-    const medications =
-      readUserStore(
-        KEYS.medications,
-        []
-      );
-
-    writeUserStore(
-      KEYS.medications,
-      medications.filter(
-        (medication) =>
-          medication.id !== id
-      )
-    );
-
-    return true;
-  },
+  remove: async (id) =>
+    routinesApi.remove(id),
 };
-
-// ---------------------------------------------------------------------------
-// Appointments
-// ---------------------------------------------------------------------------
 
 export const appointmentsApi = {
-  async list() {
-    return readUserStore(
-      KEYS.appointments,
-      []
-    );
-  },
+  list: async () =>
+    (await routinesApi.list()).filter(
+      (r) => r.type === 'Appointment',
+    ),
 
-  async create(item) {
-    const appointments =
-      readUserStore(
-        KEYS.appointments,
-        []
-      );
+  create: async (item) =>
+    routinesApi.create({
+      ...item,
+      type: 'Appointment',
+      name:
+        item.name ||
+        item.doctorName,
+    }),
 
-    const created = {
-      id: uid(),
+  update: async (id, item) =>
+    routinesApi.update(id, {
+      ...item,
+      type: 'Appointment',
+      name:
+        item.name ||
+        item.doctorName,
+    }),
 
-      doctorName:
-        item.doctorName?.trim() ||
-        'Appointment',
-
-      specialty:
-        item.specialty?.trim() ||
-        '',
-
-      date:
-        item.date ||
-        new Date()
-          .toISOString()
-          .slice(0, 10),
-
-      time:
-        item.time ||
-        '10:00 AM',
-
-      location:
-        item.location?.trim() ||
-        '',
-    };
-
-    writeUserStore(
-      KEYS.appointments,
-      [
-        created,
-        ...appointments,
-      ]
-    );
-
-    return created;
-  },
-
-  async update(
-    id,
-    item
-  ) {
-    const appointments =
-      readUserStore(
-        KEYS.appointments,
-        []
-      );
-
-    const next =
-      appointments.map(
-        (appointment) =>
-          appointment.id === id
-            ? {
-                ...appointment,
-                ...item,
-                id,
-              }
-            : appointment
-      );
-
-    writeUserStore(
-      KEYS.appointments,
-      next
-    );
-
-    return next.find(
-      (appointment) =>
-        appointment.id === id
-    );
-  },
-
-  async remove(id) {
-    const appointments =
-      readUserStore(
-        KEYS.appointments,
-        []
-      );
-
-    writeUserStore(
-      KEYS.appointments,
-      appointments.filter(
-        (appointment) =>
-          appointment.id !== id
-      )
-    );
-
-    return true;
-  },
+  remove: async (id) =>
+    routinesApi.remove(id),
 };
-
-// ---------------------------------------------------------------------------
-// Checkups
-// ---------------------------------------------------------------------------
 
 export const checkupsApi = {
-  async list() {
-    return readUserStore(
-      KEYS.checkups,
-      []
-    );
-  },
+  list: async () =>
+    (await routinesApi.list()).filter(
+      (r) => r.type === 'Checkup',
+    ),
 
-  async create(item) {
-    const checkups =
-      readUserStore(
-        KEYS.checkups,
-        []
-      );
+  create: async (item) =>
+    routinesApi.create({
+      ...item,
+      type: 'Checkup',
+      name: item.name,
+    }),
 
-    const created = {
-      id: uid(),
+  update: async (id, item) =>
+    routinesApi.update(id, {
+      ...item,
+      type: 'Checkup',
+      name: item.name,
+    }),
 
-      name:
-        item.name?.trim() ||
-        'Checkup',
-
-      nextDue:
-        item.nextDue ||
-        new Date()
-          .toISOString()
-          .slice(0, 10),
-    };
-
-    writeUserStore(
-      KEYS.checkups,
-      [
-        created,
-        ...checkups,
-      ]
-    );
-
-    return created;
-  },
-
-  async update(
-    id,
-    item
-  ) {
-    const checkups =
-      readUserStore(
-        KEYS.checkups,
-        []
-      );
-
-    const next =
-      checkups.map(
-        (checkup) =>
-          checkup.id === id
-            ? {
-                ...checkup,
-                ...item,
-                id,
-              }
-            : checkup
-      );
-
-    writeUserStore(
-      KEYS.checkups,
-      next
-    );
-
-    return next.find(
-      (checkup) =>
-        checkup.id === id
-    );
-  },
-
-  async remove(id) {
-    const checkups =
-      readUserStore(
-        KEYS.checkups,
-        []
-      );
-
-    writeUserStore(
-      KEYS.checkups,
-      checkups.filter(
-        (checkup) =>
-          checkup.id !== id
-      )
-    );
-
-    return true;
-  },
+  remove: async (id) =>
+    routinesApi.remove(id),
 };
 
-// ---------------------------------------------------------------------------
-// Vitals
-// ---------------------------------------------------------------------------
-
 export const vitalsApi = {
-  async list() {
-    return readUserStore(
-      KEYS.vitals,
-      []
-    );
-  },
+  list: async () =>
+    (await routinesApi.list()).filter(
+      (r) => r.type === 'Vitals',
+    ),
 
-  async create(item) {
-    const vitals =
-      readUserStore(
-        KEYS.vitals,
-        []
-      );
-
-    const created = {
-      id: uid(),
+  create: async (item) =>
+    routinesApi.create({
       ...item,
-    };
+      type: 'Vitals',
+      name:
+        item.name ||
+        item.type,
+    }),
 
-    writeUserStore(
-      KEYS.vitals,
-      [
-        created,
-        ...vitals,
-      ]
-    );
+  update: async (id, item) =>
+    routinesApi.update(id, {
+      ...item,
+      type: 'Vitals',
+      name:
+        item.name ||
+        item.type,
+    }),
 
-    return created;
-  },
-
-  async update(
-    id,
-    item
-  ) {
-    const vitals =
-      readUserStore(
-        KEYS.vitals,
-        []
-      );
-
-    const next =
-      vitals.map(
-        (vital) =>
-          vital.id === id
-            ? {
-                ...vital,
-                ...item,
-                id,
-              }
-            : vital
-      );
-
-    writeUserStore(
-      KEYS.vitals,
-      next
-    );
-
-    return next.find(
-      (vital) =>
-        vital.id === id
-    );
-  },
-
-  async remove(id) {
-    const vitals =
-      readUserStore(
-        KEYS.vitals,
-        []
-      );
-
-    writeUserStore(
-      KEYS.vitals,
-      vitals.filter(
-        (vital) =>
-          vital.id !== id
-      )
-    );
-
-    return true;
-  },
+  remove: async (id) =>
+    routinesApi.remove(id),
 };
