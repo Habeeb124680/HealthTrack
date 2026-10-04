@@ -979,3 +979,107 @@ label { display: flex; flex-direction: column; gap: 8px; font-size: 0.72rem; fon
   .quick-row { max-width: 420px; }
 
 }
+/* ---------------------------------------------------------------------- */
+/* Mobile form safety                                                     */
+/* ---------------------------------------------------------------------- */
+
+.modal-form,
+.stacked-form {
+  min-width: 0;
+}
+
+.modal-form label,
+.stacked-form label,
+.field-row label {
+  min-width: 0;
+}
+
+.modal-form input,
+.modal-form select,
+.modal-form textarea,
+.stacked-form input,
+.stacked-form select,
+.stacked-form textarea {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.field-row {
+  min-width: 0;
+}
+
+.field-row > label {
+  min-width: 0;
+}
+
+.modal-actions {
+  flex-wrap: wrap;
+}
+
+.day-picker {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.day-chip {
+  flex: 0 0 auto;
+}
+
+@media (max-width: 560px) {
+  .modal {
+    width: 100%;
+    max-width: 100%;
+    padding: 18px 14px calc(18px + env(safe-area-inset-bottom));
+    max-height: 90vh;
+  }
+
+  .field-row {
+    grid-template-columns: 1fr;
+    gap: 14px;
+  }
+
+  .modal-actions {
+    width: 100%;
+    justify-content: stretch;
+  }
+
+  .modal-actions .btn {
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+
+  .modal-actions .btn-danger {
+    flex: 0 0 auto;
+  }
+
+  .stacked-form {
+    width: 100%;
+  }
+
+  .form-page {
+    width: 100%;
+    max-width: 100%;
+  }
+}
+
+@media (max-width: 380px) {
+  .modal {
+    padding-left: 12px;
+    padding-right: 12px;
+  }
+
+  .modal-actions {
+    gap: 7px;
+  }
+
+  .modal-actions .btn {
+    padding-left: 13px;
+    padding-right: 13px;
+    font-size: 0.88rem;
+  }
+
+  .day-chip {
+    padding: 8px 10px;
+  }
+}

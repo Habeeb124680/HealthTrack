@@ -51,7 +51,7 @@ import './App.css';
 // Helpers
 // ---------------------------------------------------------------------------
 
-const ROUTINE_TYPES = ['Medication', 'Exercise', 'Hydration', 'Sleep', 'Nutrition', 'Appointment', 'Checkup', 'Vitals', 'Other'];
+const ROUTINE_TYPES = ['Medication', 'Exercise', 'Hydration', 'Sleep', 'Nutrition', 'Appointment', 'Checkup', 'Other'];
 const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 const WEEKDAY_FULL = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
 const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
@@ -60,11 +60,11 @@ const pad2 = (n) => String(n).padStart(2, '0');
 const todayStr = () => new Date().toISOString().slice(0, 10);
 
 function typeAbbrev(type) {
-  const map = { Medication: 'Rx', Exercise: 'Ex', Hydration: 'H2O', Sleep: 'Zz', Nutrition: 'Nt', Appointment: 'Ap', Other: 'Ot' };
+  const map = { Medication: 'Rx', Exercise: 'Ex', Hydration: 'H2O', Sleep: 'Zz', Nutrition: 'Nt', Appointment: 'Ap', Checkup: 'Ck', Other: 'Ot' };
   return map[type] || type.slice(0, 2);
 }
 function calendarColor(type) {
-  const map = { Medication: 'green', Exercise: 'orange', Hydration: 'blue', Appointment: 'violet', Sleep: 'violet', Nutrition: 'violet', Other: 'violet' };
+  const map = { Medication: 'green', Exercise: 'orange', Hydration: 'blue', Appointment: 'violet', Checkup: 'orange', Sleep: 'violet', Nutrition: 'violet', Other: 'violet' };
   return map[type] || 'violet';
 }
 function vitalColor(type) {
@@ -1610,11 +1610,6 @@ function CategoryRoutinePage({
       update: updateCheckup,
       remove: removeCheckup,
     },
-    Vitals: {
-      add: addVital,
-      update: updateVital,
-      remove: removeVital,
-    },
   };
 
   const actions = actionMap[type];
@@ -1772,12 +1767,288 @@ function CheckupsPage() {
 }
 
 function VitalsPage() {
+  const { vitals, addVital, updateVital, removeVital, loading } = useData();
+  const [modal, setModal] = useState(null);
+  const [saving, setSaving] = useState(false);
+  const types = ['BP', 'HR', 'Weight', 'Temperature'];
+
+  const latestFor = (type) =>
+    [...vitals]
+      .filter((v) => v.type === type)
+      .sort((a, b) => b.date.localeCompare(a.date))[0];
+
+  const recent = [...vitals]
+    .sort((a, b) => b.date.localeCompare(a.date))
+    .slice(0, 10);
+
+  if (loading) return <div className="full-loader">Loading vitals…</div>;
+
+  const openNew = () =>
+    setModal({
+      type: 'BP',
+      value: '',
+      date: todayStr(),
+    });
+
+  const openEdit = (vital) =>
+    setModal({ ...vital });
+
+  const submit = async (e) => {
+    e.preventDefault();
+    if (!modal?.value?.trim() || !modal?.date) return;
+
+    setSaving(true);
+    try {
+      const payload = {
+        type: modal.type,
+        value: modal.value.trim(),
+        date: modal.date,
+        unit: vitalUnit(modal.type),
+      };
+
+      if (modal.id) {
+        await updateVital(modal.id, payload);
+      } else {
+        await addVital(payload);
+      }
+
+      setModal(null);
+    } finally {
+      setSaving(false);
+    }
+  };
+
   return (
-    <CategoryRoutinePage
-      type="Vitals"
-      title="Vitals"
-      badge="Vi"
-    />
+    <div className="page">
+      <h1 className="page-title">Vitals</h1>
+
+      <div className="vitals-grid">
+        {types.map((t) => {
+          const latest = latestFor(t);
+
+          return (
+            <div className="vital-card" key={t}>
+              <Badge
+                text={
+                  t === 'Weight'
+                    ? 'Wt'
+                    : t === 'Temperature'
+                      ? 'Tp'
+                      : t
+                }
+                tint={vitalColor(t)}
+              />
+              <span className="vital-label">{vitalLabel(t)}</span>
+              <strong className="vital-value">
+                {latest
+                  ? `${latest.value} ${latest.unit || vitalUnit(t)}`
+                  : '—'}
+              </strong>
+            </div>
+          );
+        })}
+      </div>
+
+      <h2 className="section-title">Recent Readings</h2>
+
+      {recent.length === 0 ? (
+        <EmptyState title="No readings yet" />
+      ) : (
+        <div className="row-list">
+          {recent.map((v) => (
+            <button
+              type="button"
+              key={v.id}
+              className="item-row as-button"
+              onClick={() => openEdit(v)}
+            >
+              <Badge
+                text={
+                  v.type === 'Weight'
+                    ? 'Wt'
+                    : v.type === 'Temperature'
+                      ? 'Tp'
+                      : v.type
+                }
+                tint={vitalColor(v.type)}
+              />
+
+              <div className="item-row-body">
+                <strong>{vitalLabel(v.type)}</strong>
+                <span>{formatDatePretty(v.date)}</span>
+              </div>
+
+              <strong>
+                {v.value} {v.unit || vitalUnit(v.type)}
+              </strong>
+            </button>
+          ))}
+        </div>
+      )}
+
+      <Fab onClick={openNew} />
+
+      {modal && (
+        <ModalSheet
+          title={modal.id ? 'Edit Vital Reading' : 'New Vital Reading'}
+          onClose={() => setModal(null)}
+        >
+          {modal.id ? (
+            <div className="modal-form">
+              <p className="modal-help">
+                Review this reading or delete it from your health records.
+              </p>
+
+              <label>
+                Vital Type
+                <select
+                  value={modal.type}
+                  onChange={(e) =>
+                    setModal({
+                      ...modal,
+                      type: e.target.value,
+                    })
+                  }
+                >
+                  {types.map((t) => (
+                    <option key={t} value={t}>
+                      {vitalLabel(t)}
+                    </option>
+                  ))}
+                </select>
+              </label>
+
+              <label>
+                Reading
+                <input
+                  value={modal.value || ''}
+                  onChange={(e) =>
+                    setModal({
+                      ...modal,
+                      value: e.target.value,
+                    })
+                  }
+                  placeholder="e.g. 120/80"
+                  required
+                />
+              </label>
+
+              <label>
+                Date Recorded
+                <input
+                  type="date"
+                  value={modal.date || ''}
+                  onChange={(e) =>
+                    setModal({
+                      ...modal,
+                      date: e.target.value,
+                    })
+                  }
+                  required
+                />
+              </label>
+
+              <div className="modal-actions">
+                <button
+                  type="button"
+                  className="btn btn-danger"
+                  onClick={async () => {
+                    await removeVital(modal.id);
+                    setModal(null);
+                  }}
+                >
+                  <Trash2 size={15} />
+                  Delete
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-ghost"
+                  onClick={() => setModal(null)}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-primary"
+                  onClick={submit}
+                  disabled={saving}
+                >
+                  {saving ? 'Saving…' : 'Save'}
+                </button>
+              </div>
+            </div>
+          ) : (
+            <form className="modal-form" onSubmit={submit}>
+              <label>
+                Vital Type
+                <select
+                  value={modal.type}
+                  onChange={(e) =>
+                    setModal({
+                      ...modal,
+                      type: e.target.value,
+                    })
+                  }
+                >
+                  {types.map((t) => (
+                    <option key={t} value={t}>
+                      {vitalLabel(t)}
+                    </option>
+                  ))}
+                </select>
+              </label>
+
+              <label>
+                Reading
+                <input
+                  value={modal.value}
+                  onChange={(e) =>
+                    setModal({
+                      ...modal,
+                      value: e.target.value,
+                    })
+                  }
+                  placeholder="e.g. 120/80"
+                  required
+                />
+              </label>
+
+              <label>
+                Date Recorded
+                <input
+                  type="date"
+                  value={modal.date}
+                  onChange={(e) =>
+                    setModal({
+                      ...modal,
+                      date: e.target.value,
+                    })
+                  }
+                  required
+                />
+              </label>
+
+              <div className="modal-actions">
+                <button
+                  type="button"
+                  className="btn btn-ghost"
+                  onClick={() => setModal(null)}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="btn btn-primary"
+                  disabled={saving}
+                >
+                  {saving ? 'Saving…' : 'Save'}
+                </button>
+              </div>
+            </form>
+          )}
+        </ModalSheet>
+      )}
+    </div>
   );
 }
 
