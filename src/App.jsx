@@ -44,6 +44,7 @@ import {
   authApi,
   routinesApi,
   logsApi,
+  vitalsApi,
 } from './api';
 import './App.css';
 
@@ -239,22 +240,38 @@ const DataContext = createContext(null);
 
 function useCrudState(apiObj) {
   const [items, setItems] = useState([]);
-  const load = useCallback(async () => setItems(await apiObj.list()), [apiObj]);
+
+  const load = useCallback(async () => {
+    const result = await apiObj.list();
+    setItems(Array.isArray(result) ? result : []);
+  }, [apiObj]);
+
   const add = useCallback(async (item) => {
     const created = await apiObj.create(item);
+    if (!created) return created;
     setItems((prev) => [created, ...prev]);
     return created;
   }, [apiObj]);
+
   const update = useCallback(async (id, patch) => {
     const updated = await apiObj.update(id, patch);
-    setItems((prev) => prev.map((i) => (i.id === id ? updated : i)));
+    if (!updated) return updated;
+    setItems((prev) =>
+      prev.map((i) => (i.id === id ? updated : i)),
+    );
     return updated;
   }, [apiObj]);
+
   const remove = useCallback(async (id) => {
     await apiObj.remove(id);
     setItems((prev) => prev.filter((i) => i.id !== id));
   }, [apiObj]);
-  return { items, load, add, update, remove };
+
+  const clear = useCallback(() => {
+    setItems([]);
+  }, []);
+
+  return { items, load, add, update, remove, clear };
 }
 
 function DataProvider({ children }) {
@@ -263,6 +280,7 @@ function DataProvider({ children }) {
   const [loading, setLoading] = useState(true);
 
   const routines = useCrudState(routinesApi);
+  const vitals = useCrudState(vitalsApi);
 
   const refresh = useCallback(async () => {
     setLoading(true);
@@ -270,6 +288,7 @@ function DataProvider({ children }) {
     const results = await Promise.allSettled([
       routines.load(),
       logsApi.list(),
+      vitals.load(),
     ]);
 
     if (results[0].status === 'rejected') {
@@ -277,38 +296,70 @@ function DataProvider({ children }) {
     }
 
     if (results[1].status === 'fulfilled') {
-      setLogs(results[1].value);
+      setLogs(
+        Array.isArray(results[1].value)
+          ? results[1].value
+          : [],
+      );
     } else {
-      console.error('Failed to load routine logs:', results[1].reason);
+      console.error(
+        'Failed to load routine logs:',
+        results[1].reason,
+      );
       setLogs([]);
     }
 
+    if (results[2].status === 'rejected') {
+      console.error(
+        'Failed to load vitals:',
+        results[2].reason,
+      );
+    }
+
     setLoading(false);
-  }, [routines.load]);
+  }, [routines.load, vitals.load]);
 
   useEffect(() => {
     if (user) {
       refresh();
     } else {
       setLogs([]);
+      routines.clear();
+      vitals.clear();
+      setLoading(false);
     }
-  }, [user, refresh]);
+  }, [user, refresh, routines.clear, vitals.clear]);
 
-  const logStatus = useCallback(async (routineId, date, status) => {
-    const entry = await logsApi.record({ routineId, date, status });
-    setLogs((prev) => [
-      entry,
-      ...prev.filter(
-        (l) => !(l.routineId === routineId && l.date === date),
-      ),
-    ]);
-    return entry;
-  }, []);
+  const logStatus = useCallback(
+    async (routineId, date, status) => {
+      const entry = await logsApi.record({
+        routineId,
+        date,
+        status,
+      });
+
+      setLogs((prev) => [
+        entry,
+        ...prev.filter(
+          (l) =>
+            !(
+              l.routineId === routineId &&
+              l.date === date
+            ),
+        ),
+      ]);
+
+      return entry;
+    },
+    [],
+  );
 
   const logFor = useCallback(
     (routineId, date) =>
       logs.find(
-        (l) => l.routineId === routineId && l.date === date,
+        (l) =>
+          l.routineId === routineId &&
+          l.date === date,
       ) || null,
     [logs],
   );
@@ -318,8 +369,12 @@ function DataProvider({ children }) {
       const created = await routines.add({
         ...item,
         type,
-        name: item.name || item.title || 'Health routine',
+        name:
+          item.name ||
+          item.title ||
+          'Health routine',
       });
+
       return created;
     },
     [routines.add],
@@ -330,7 +385,10 @@ function DataProvider({ children }) {
       return routines.update(id, {
         ...item,
         type,
-        name: item.name || item.title || 'Health routine',
+        name:
+          item.name ||
+          item.title ||
+          'Health routine',
       });
     },
     [routines.update],
@@ -341,33 +399,88 @@ function DataProvider({ children }) {
     [routines.remove],
   );
 
+  // Appointments are routines with the Appointment type.
+  // Expose them in the shape the Calendar page expects.
+  const appointments = useMemo(
+    () =>
+      routines.items
+        .filter(
+          (routine) =>
+            routine.type === 'Appointment',
+        )
+        .map((routine) => ({
+          id: routine.id,
+          doctorName:
+            routine.name || 'Appointment',
+          specialty: '',
+          date:
+            routine.startDate || '',
+          time:
+            routine.time || '',
+          location: '',
+          routineId: routine.id,
+        })),
+    [routines.items],
+  );
+
   const value = useMemo(
     () => ({
       loading,
+
       routines: routines.items,
       addRoutine: routines.add,
       updateRoutine: routines.update,
       removeRoutine: routines.remove,
 
-      addMedication: (item) => addCategoryRoutine('Medication', item),
+      addMedication: (item) =>
+        addCategoryRoutine(
+          'Medication',
+          item,
+        ),
       updateMedication: (id, item) =>
-        updateCategoryRoutine(id, 'Medication', item),
-      removeMedication: removeCategoryRoutine,
+        updateCategoryRoutine(
+          id,
+          'Medication',
+          item,
+        ),
+      removeMedication:
+        removeCategoryRoutine,
 
-      addAppointment: (item) => addCategoryRoutine('Appointment', item),
+      addAppointment: (item) =>
+        addCategoryRoutine(
+          'Appointment',
+          item,
+        ),
       updateAppointment: (id, item) =>
-        updateCategoryRoutine(id, 'Appointment', item),
-      removeAppointment: removeCategoryRoutine,
+        updateCategoryRoutine(
+          id,
+          'Appointment',
+          item,
+        ),
+      removeAppointment:
+        removeCategoryRoutine,
 
-      addCheckup: (item) => addCategoryRoutine('Checkup', item),
+      addCheckup: (item) =>
+        addCategoryRoutine(
+          'Checkup',
+          item,
+        ),
       updateCheckup: (id, item) =>
-        updateCategoryRoutine(id, 'Checkup', item),
-      removeCheckup: removeCategoryRoutine,
+        updateCategoryRoutine(
+          id,
+          'Checkup',
+          item,
+        ),
+      removeCheckup:
+        removeCategoryRoutine,
 
-      addVital: (item) => addCategoryRoutine('Vitals', item),
-      updateVital: (id, item) =>
-        updateCategoryRoutine(id, 'Vitals', item),
-      removeVital: removeCategoryRoutine,
+      // Vitals are deliberately separate from routines.
+      vitals: vitals.items,
+      addVital: vitals.add,
+      updateVital: vitals.update,
+      removeVital: vitals.remove,
+
+      appointments,
 
       logs,
       logStatus,
@@ -382,13 +495,22 @@ function DataProvider({ children }) {
       addCategoryRoutine,
       updateCategoryRoutine,
       removeCategoryRoutine,
+      vitals.items,
+      vitals.add,
+      vitals.update,
+      vitals.remove,
+      appointments,
       logs,
       logStatus,
       logFor,
     ],
   );
 
-  return <DataContext.Provider value={value}>{children}</DataContext.Provider>;
+  return (
+    <DataContext.Provider value={value}>
+      {children}
+    </DataContext.Provider>
+  );
 }
 
 const useData = () => useContext(DataContext);

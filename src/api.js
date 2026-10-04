@@ -7,7 +7,6 @@ export const API_BASE_URL =
 
 const TOKEN_KEY = 'healthtrack.token';
 const USER_KEY = 'healthtrack.user';
-
 const USE_MOCK = false;
 
 // ---------------------------------------------------------------------------
@@ -110,9 +109,9 @@ function currentUserScope() {
 
   return String(
     user.id ||
-    user._id ||
-    user.email ||
-    'guest'
+      user._id ||
+      user.email ||
+      'guest'
   )
     .trim()
     .toLowerCase();
@@ -182,6 +181,7 @@ const routineTypeToBackend = {
   Sleep: 'sleep',
   Nutrition: 'nutrition',
   Appointment: 'appointment',
+  Checkup: 'health_check',
   Other: 'other',
 };
 
@@ -191,7 +191,7 @@ const routineTypeFromBackend = {
   hydration: 'Hydration',
   sleep: 'Sleep',
   nutrition: 'Nutrition',
-  health_check: 'Other',
+  health_check: 'Checkup',
   appointment: 'Appointment',
   other: 'Other',
 };
@@ -226,7 +226,8 @@ function normalizeRoutine(routine) {
   if (!routine) return null;
 
   const ownerId =
-    typeof routine.user === 'object' && routine.user
+    typeof routine.user === 'object' &&
+    routine.user
       ? (
           routine.user._id ||
           routine.user.id ||
@@ -260,11 +261,15 @@ function normalizeRoutine(routine) {
       '',
 
     frequency:
-      routineFrequencyFromBackend[routine.frequency] ||
+      routineFrequencyFromBackend[
+        routine.frequency
+      ] ||
       routine.frequency ||
       'Daily',
 
-    days: routine.days || [],
+    days: Array.isArray(routine.days)
+      ? routine.days
+      : [],
 
     time: fromBackendTime(routine.time),
 
@@ -316,23 +321,20 @@ function prepareRoutineForBackend(item) {
       item.frequency?.toLowerCase() ||
       'daily',
 
-    time:
-      toBackendDate(
-        startDate,
-        time
-      ),
+    time: toBackendDate(
+      startDate,
+      time
+    ),
 
-    startDate:
-      toBackendDate(
-        startDate,
-        '00:00'
-      ),
+    startDate: toBackendDate(
+      startDate,
+      '00:00'
+    ),
 
-    endDate:
-      toBackendDate(
-        item.endDate || startDate,
-        '23:59'
-      ),
+    endDate: toBackendDate(
+      item.endDate || startDate,
+      '23:59'
+    ),
 
     routineStatus:
       item.active !== undefined
@@ -358,10 +360,7 @@ export const authApi = {
         email,
       };
 
-      writeStore(
-        KEYS.user,
-        user
-      );
+      writeStore(USER_KEY, user);
 
       return delay({
         user,
@@ -369,29 +368,23 @@ export const authApi = {
       });
     }
 
-    await request(
-      '/users/register',
-      {
+    await request('/users/register', {
+      method: 'POST',
+      body: {
+        name,
+        email,
+        password,
+      },
+    });
+
+    const loginResult =
+      await request('/users/login', {
         method: 'POST',
         body: {
-          name,
           email,
           password,
         },
-      }
-    );
-
-    const loginResult =
-      await request(
-        '/users/login',
-        {
-          method: 'POST',
-          body: {
-            email,
-            password,
-          },
-        }
-      );
+      });
 
     if (loginResult?.token) {
       localStorage.setItem(
@@ -410,52 +403,48 @@ export const authApi = {
     // Create the two default routines
     // for a newly registered account.
     const startDate =
-      new Date().toISOString().slice(0, 10);
+      new Date()
+        .toISOString()
+        .slice(0, 10);
 
     const endDate = '2099-12-31';
 
     await Promise.allSettled([
-      request(
-        '/routine/createRoutine',
-        {
-          method: 'POST',
-          body: {
-            title: 'Morning Run',
-            type: 'exercise',
-            description:
-              'A short morning run to support daily physical activity.',
-            frequency: 'daily',
-            time:
-              `${startDate}T07:00:00.000Z`,
-            startDate:
-              `${startDate}T00:00:00.000Z`,
-            endDate:
-              `${endDate}T23:59:00.000Z`,
-            routineStatus: true,
-          },
-        }
-      ),
+      request('/routine/createRoutine', {
+        method: 'POST',
+        body: {
+          title: 'Morning Run',
+          type: 'exercise',
+          description:
+            'A short morning run to support daily physical activity.',
+          frequency: 'daily',
+          time:
+            `${startDate}T07:00:00.000Z`,
+          startDate:
+            `${startDate}T00:00:00.000Z`,
+          endDate:
+            `${endDate}T23:59:00.000Z`,
+          routineStatus: true,
+        },
+      }),
 
-      request(
-        '/routine/createRoutine',
-        {
-          method: 'POST',
-          body: {
-            title: 'Drink Water',
-            type: 'hydration',
-            description:
-              'Drink water in the morning to support healthy hydration.',
-            frequency: 'daily',
-            time:
-              `${startDate}T08:00:00.000Z`,
-            startDate:
-              `${startDate}T00:00:00.000Z`,
-            endDate:
-              `${endDate}T23:59:00.000Z`,
-            routineStatus: true,
-          },
-        }
-      ),
+      request('/routine/createRoutine', {
+        method: 'POST',
+        body: {
+          title: 'Drink Water',
+          type: 'hydration',
+          description:
+            'Drink water in the morning to support healthy hydration.',
+          frequency: 'daily',
+          time:
+            `${startDate}T08:00:00.000Z`,
+          startDate:
+            `${startDate}T00:00:00.000Z`,
+          endDate:
+            `${endDate}T23:59:00.000Z`,
+          routineStatus: true,
+        },
+      }),
     ]);
 
     return loginResult;
@@ -467,10 +456,7 @@ export const authApi = {
   }) {
     if (USE_MOCK) {
       const existing =
-        readStore(
-          KEYS.user,
-          null
-        );
+        readStore(USER_KEY, null);
 
       const user =
         existing &&
@@ -478,15 +464,11 @@ export const authApi = {
           ? existing
           : {
               id: uid(),
-              name:
-                email.split('@')[0],
+              name: email.split('@')[0],
               email,
             };
 
-      writeStore(
-        KEYS.user,
-        user
-      );
+      writeStore(USER_KEY, user);
 
       localStorage.setItem(
         TOKEN_KEY,
@@ -500,16 +482,13 @@ export const authApi = {
     }
 
     const result =
-      await request(
-        '/users/login',
-        {
-          method: 'POST',
-          body: {
-            email,
-            password,
-          },
-        }
-      );
+      await request('/users/login', {
+        method: 'POST',
+        body: {
+          email,
+          password,
+        },
+      });
 
     if (result?.token) {
       localStorage.setItem(
@@ -531,10 +510,7 @@ export const authApi = {
   async me() {
     if (USE_MOCK) {
       return delay(
-        readStore(
-          USER_KEY,
-          null
-        )
+        readStore(USER_KEY, null)
       );
     }
 
@@ -546,10 +522,7 @@ export const authApi = {
 
   async updateProfile(patch) {
     const currentUser =
-      readStore(
-        USER_KEY,
-        {}
-      );
+      readStore(USER_KEY, {});
 
     const updatedUser = {
       ...currentUser,
@@ -599,6 +572,7 @@ export const authApi = {
     );
   },
 };
+
 // ---------------------------------------------------------------------------
 // Routines
 // ---------------------------------------------------------------------------
@@ -615,11 +589,16 @@ function getRoutineFromResponse(result) {
 export const routinesApi = {
   async list() {
     if (USE_MOCK) {
-      return delay(
+      const routines =
         readUserStore(
           KEYS.routines,
           []
-        )
+        );
+
+      return delay(
+        Array.isArray(routines)
+          ? routines
+          : []
       );
     }
 
@@ -634,20 +613,21 @@ export const routinesApi = {
         null
       );
 
-    const currentUserId = String(
-      currentUser?.id ||
-      currentUser?._id ||
-      currentUser?.email ||
-      ''
-    );
+    const currentUserId =
+      String(
+        currentUser?.id ||
+        currentUser?._id ||
+        currentUser?.email ||
+        ''
+      );
 
     const routines =
-      (result?.data || [])
-        .map(normalizeRoutine)
-        .filter(Boolean);
+      Array.isArray(result?.data)
+        ? result.data
+            .map(normalizeRoutine)
+            .filter(Boolean)
+        : [];
 
-    // Only show routines belonging to
-    // the currently logged-in user.
     if (!currentUserId) {
       return [];
     }
@@ -892,16 +872,22 @@ export const routinesApi = {
     return true;
   },
 };
+
 // ---------------------------------------------------------------------------
 // Routine Logs
 // ---------------------------------------------------------------------------
 
 export const logsApi = {
   async list() {
-    return readUserStore(
-      KEYS.logs,
-      []
-    );
+    const stored =
+      readUserStore(
+        KEYS.logs,
+        []
+      );
+
+    return Array.isArray(stored)
+      ? stored
+      : [];
   },
 
   async record({
@@ -928,7 +914,8 @@ export const logsApi = {
       logs.filter(
         (log) =>
           !(
-            log.routineId === routineId &&
+            log.routineId ===
+              routineId &&
             log.date === date
           )
       );
@@ -951,10 +938,15 @@ export const logsApi = {
 
 export const medicationsApi = {
   async list() {
-    return readUserStore(
-      KEYS.medications,
-      []
-    );
+    const stored =
+      readUserStore(
+        KEYS.medications,
+        []
+      );
+
+    return Array.isArray(stored)
+      ? stored
+      : [];
   },
 
   async create(item) {
@@ -966,20 +958,25 @@ export const medicationsApi = {
 
     const created = {
       id: uid(),
+
       name:
         item.name?.trim() ||
         'Medication',
+
       category:
         item.category?.trim() ||
         '',
+
       frequency:
         item.frequency?.trim() ||
         'Daily',
+
       startDate:
         item.startDate ||
         new Date()
           .toISOString()
           .slice(0, 10),
+
       endDate:
         item.endDate ||
         '',
@@ -1052,10 +1049,15 @@ export const medicationsApi = {
 
 export const appointmentsApi = {
   async list() {
-    return readUserStore(
-      KEYS.appointments,
-      []
-    );
+    const stored =
+      readUserStore(
+        KEYS.appointments,
+        []
+      );
+
+    return Array.isArray(stored)
+      ? stored
+      : [];
   },
 
   async create(item) {
@@ -1067,20 +1069,25 @@ export const appointmentsApi = {
 
     const created = {
       id: uid(),
+
       doctorName:
         item.doctorName?.trim() ||
         'Appointment',
+
       specialty:
         item.specialty?.trim() ||
         '',
+
       date:
         item.date ||
         new Date()
           .toISOString()
           .slice(0, 10),
+
       time:
         item.time ||
         '10:00 AM',
+
       location:
         item.location?.trim() ||
         '',
@@ -1153,10 +1160,15 @@ export const appointmentsApi = {
 
 export const checkupsApi = {
   async list() {
-    return readUserStore(
-      KEYS.checkups,
-      []
-    );
+    const stored =
+      readUserStore(
+        KEYS.checkups,
+        []
+      );
+
+    return Array.isArray(stored)
+      ? stored
+      : [];
   },
 
   async create(item) {
@@ -1168,9 +1180,11 @@ export const checkupsApi = {
 
     const created = {
       id: uid(),
+
       name:
         item.name?.trim() ||
         'Checkup',
+
       nextDue:
         item.nextDue ||
         new Date()
@@ -1243,34 +1257,90 @@ export const checkupsApi = {
 // Vitals
 // ---------------------------------------------------------------------------
 
+function vitalUnitForType(type) {
+  return {
+    BP: 'mmHg',
+    HR: 'bpm',
+    Weight: 'Kg',
+    Temperature: '°C',
+  }[type] || '';
+}
+
 export const vitalsApi = {
   async list() {
-    return readUserStore(
-      KEYS.vitals,
-      []
-    );
-  },
-
-  async create(item) {
-    const vitals =
+    const stored =
       readUserStore(
         KEYS.vitals,
         []
       );
 
+    if (!Array.isArray(stored)) {
+      return [];
+    }
+
+    return stored.map((vital) => ({
+      id: vital.id,
+
+      type:
+        vital.type ||
+        'BP',
+
+      value:
+        vital.value ??
+        vital.reading ??
+        '',
+
+      date:
+        vital.date ||
+        vital.dateRecorded ||
+        new Date()
+          .toISOString()
+          .slice(0, 10),
+
+      unit:
+        vital.unit ||
+        vitalUnitForType(
+          vital.type
+        ),
+    }));
+  },
+
+  async create(item) {
+    const stored =
+      readUserStore(
+        KEYS.vitals,
+        []
+      );
+
+    const vitals =
+      Array.isArray(stored)
+        ? stored
+        : [];
+
     const created = {
       id: uid(),
+
       type:
-        item.type?.trim() ||
-        'Blood Pressure',
-      reading:
-        item.reading?.trim() ||
+        item.type ||
+        'BP',
+
+      value:
+        item.value ??
+        item.reading ??
         '',
-      dateRecorded:
+
+      date:
+        item.date ||
         item.dateRecorded ||
         new Date()
           .toISOString()
           .slice(0, 10),
+
+      unit:
+        item.unit ||
+        vitalUnitForType(
+          item.type
+        ),
     };
 
     writeUserStore(
@@ -1285,11 +1355,16 @@ export const vitalsApi = {
   },
 
   async update(id, item) {
-    const vitals =
+    const stored =
       readUserStore(
         KEYS.vitals,
         []
       );
+
+    const vitals =
+      Array.isArray(stored)
+        ? stored
+        : [];
 
     const next =
       vitals.map(
@@ -1298,6 +1373,26 @@ export const vitalsApi = {
             ? {
                 ...vital,
                 ...item,
+
+                value:
+                  item.value ??
+                  item.reading ??
+                  vital.value ??
+                  '',
+
+                date:
+                  item.date ??
+                  item.dateRecorded ??
+                  vital.date ??
+                  '',
+
+                unit:
+                  item.unit ||
+                  vital.unit ||
+                  vitalUnitForType(
+                    item.type ||
+                    vital.type
+                  ),
               }
             : vital
       );
@@ -1316,11 +1411,16 @@ export const vitalsApi = {
   },
 
   async remove(id) {
-    const vitals =
+    const stored =
       readUserStore(
         KEYS.vitals,
         []
       );
+
+    const vitals =
+      Array.isArray(stored)
+        ? stored
+        : [];
 
     writeUserStore(
       KEYS.vitals,
